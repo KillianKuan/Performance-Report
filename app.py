@@ -14,8 +14,8 @@ VALID_CATEGORIES = {"Tablet", "CDR", "Tablet ACC", "CDR ACC"}
 GP_COL = "final GP(NTD,data from Financial Report)"
 # ── DES 關鍵字分類規則（維護此處即可，同步更新頁面對照表）──
 DES_RULES = {
-    "CDR ACC":    ["cdr", "gemini", "evo", "sprint", "sd card"],
-    "Tablet ACC": ["tablet", "chiron", "hera", "phaeton", "surfing pro", "cradle"],
+    "CDR ACC":    ["cdr", "gemini", "evo", "sprint", "sd card", "panic button", "iosix", "uvc camera", "k220", "k245", "k265"],
+    "Tablet ACC": ["tablet", "chiron", "hera", "phaeton", "surfing pro", "cradle", "f840"],
 }
 
 # ── 1. 上傳檔案 ──────────────────────────────────────────────
@@ -254,4 +254,3 @@ if st.button("▶ Run"):
         file_name="sales_report.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
-
