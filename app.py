@@ -224,7 +224,8 @@ if st.button("▶ Run"):
             cat_df["Category"] = cat_df["Category"].replace("CDR ACC", "CDR")
         if merge_tablet_acc:
             cat_df["Category"] = cat_df["Category"].replace("Tablet ACC", "Tablet")
-        qty_base_cat = cat_df[cat_df["Category"].isin({"Tablet", "CDR"})] if use_tablet_cdr_only else cat_df
+        # qty filter: use original category mask (pre-merge) so ACC rows are still excluded
+        qty_base_cat = cat_df[base["Category"].isin({"Tablet", "CDR"})] if use_tablet_cdr_only else cat_df
         long_bycat = build_long(cat_df, qty_base_cat, ["Month", "Category"])
         wide_bycat = to_wide(long_bycat, ["Month", "Category"], add_total=False)
         st.subheader("📋 ByCategory (Monthly Wide Report x Category)")
