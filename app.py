@@ -12,6 +12,11 @@ REQUIRED_COLS = [
 ]
 VALID_CATEGORIES = {"Tablet", "CDR", "Tablet ACC", "CDR ACC"}
 GP_COL = "final GP(NTD,data from Financial Report)"
+# ── DES 關鍵字分類規則（維護此處即可，同步更新頁面對照表）──
+DES_RULES = {
+    "CDR ACC":    ["CDR", "gemini", "evo", "sprint", "sd card"],
+    "Tablet ACC": ["Tablet", "chiron", "hera", "phaeton", "surfing pro", "cradle"],
+}
 
 # ── 1. 上傳檔案 ──────────────────────────────────────────────
 uploaded = st.file_uploader("上傳 .xlsx 檔案", type=["xlsx"])
@@ -36,7 +41,11 @@ if missing:
     st.error(f"缺少必要欄位：{missing}")
     st.stop()
 
-df = raw[REQUIRED_COLS].copy()
+has_des = "DES" in raw.columns
+read_cols = REQUIRED_COLS + (["DES"] if has_des else [])
+df = raw[read_cols].copy()
+if not has_des:
+    st.warning("⚠️ 找不到 'DES' 欄位，無法進行 DES 關鍵字分類，未知 Category 將歸入 Others。")
 
 # ── 3. 日期解析 ──────────────────────────────────────────────
 df["Ship Date"] = df["Ship Date"].astype(str).str.strip()
@@ -47,9 +56,41 @@ if nat_count > 0:
 df = df.dropna(subset=["Ship Date"])
 df["Month"] = df["Ship Date"].dt.strftime("%Y-%m")
 
-# ── 4. Category 正規化 ───────────────────────────────────────
+# ── 4. Category 正規化（含 DES 輔助判定）────────────────────
 df["Category"] = df["Category"].astype(str).str.strip()
-df["Category"] = df["Category"].apply(lambda x: x if x in VALID_CATEGORIES else "Others")
+if has_des:
+    df["DES"] = df["DES"].astype(str).str.strip()
+def classify_by_des(des_val):
+    des_lower = des_val.lower()
+    return [cat for cat, kws in DES_RULES.items() if any(kw in des_lower for kw in kws)]
+ambiguous_rows = []
+def normalize_category(row):
+    cat = row["Category"]
+    if cat in VALID_CATEGORIES:
+        return cat
+    if not has_des:
+        return "Others"
+    matches = classify_by_des(str(row.get("DES", "")))
+    if len(matches) == 0:
+        return "Others"
+    elif len(matches) == 1:
+        return matches[0]
+    else:
+        ambiguous_rows.append({
+            "Part Number": row.get("Part Number", ""),
+            "DES": row.get("DES", ""),
+            "Original Category": cat,
+            "命中分類": " / ".join(matches),
+            "暫定分類": matches[0],
+        })
+        return matches[0]
+df["Category"] = df.apply(normalize_category, axis=1)
+if ambiguous_rows:
+    st.warning(
+        f"⚠️ 發現 {len(ambiguous_rows)} 筆 DES 同時命中多個分類，"
+        f"暫以第一匹配（{list(DES_RULES.keys())[0]}）處理，請人工確認："
+    )
+    st.dataframe(pd.DataFrame(ambiguous_rows), use_container_width=True)
 
 # ── 5. 欄位型別 ──────────────────────────────────────────────
 df["QTY"] = pd.to_numeric(df["QTY"], errors="coerce").fillna(0)
