@@ -9,320 +9,239 @@ st.title("📊 Performance Report Data Analysis Tool")
 REQUIRED_COLS = [
     "Customer Name", "Ship Date", "QTY",
     "SALES Total AMT", "final GP(NTD,data from Financial Report)",
-    "Part Number", "Category"
+    "Part Number", "Category",
 ]
 VALID_CATEGORIES = {"Tablet", "CDR", "Tablet ACC", "CDR ACC"}
-# Case-insensitive lookup: normalised key → canonical name
-# e.g. "cdr acc" → "CDR ACC",  "tablet acc" → "Tablet ACC"
 _VALID_CAT_MAP = {" ".join(c.upper().split()): c for c in VALID_CATEGORIES}
-
 GP_COL = "final GP(NTD,data from Financial Report)"
-# ── DES keyword classification rules (edit here; sync with page table) ──
 DES_RULES = {
-    "CDR ACC":    ["cdr", "gemini", "evo", "sprint", "sd card", "panic button", "iosix", "uvc camera", "k220", "k245", "k265"],
+    "CDR ACC":    ["cdr", "gemini", "evo", "sprint", "sd card", "panic button",
+                   "iosix", "uvc camera", "k220", "k245", "k265"],
     "Tablet ACC": ["tablet", "chiron", "hera", "phaeton", "surfing pro", "cradle", "f840"],
 }
 
-# ── 1. Upload file ───────────────────────────────────────────────
+# ── 1. Upload ────────────────────────────────────────────────────
 uploaded = st.file_uploader("Upload .xlsx file", type=["xlsx"])
 if not uploaded:
     st.info("Please upload a .xlsx file containing the 'Actual' sheet.")
     st.stop()
 
-# ── 2. Load, validate, clean (cached) ───────────────────────────
+# ── 2. Load & clean (cached) ─────────────────────────────────────
 @st.cache_data
 def load_and_clean(file_bytes):
     try:
         xl = pd.ExcelFile(io.BytesIO(file_bytes))
     except Exception as e:
         return None, 0, f"Cannot read file: {e}", [], False
-
     if "Actual" not in xl.sheet_names:
-        return None, 0, f"'Actual' sheet not found. Available sheets: {xl.sheet_names}", [], False
-
+        return None, 0, f"'Actual' sheet not found. Available: {xl.sheet_names}", [], False
     raw = xl.parse("Actual")
     missing = [c for c in REQUIRED_COLS if c not in raw.columns]
     if missing:
-        return None, 0, f"Missing required columns: {missing}", [], False
+        return None, 0, f"Missing columns: {missing}", [], False
 
     has_des = "DES" in raw.columns
-    read_cols = REQUIRED_COLS + (["DES"] if has_des else [])
-    df = raw[read_cols].copy()
-
-    df["Ship Date"] = df["Ship Date"].astype(str).str.strip()
-    df["Ship Date"] = pd.to_datetime(df["Ship Date"], errors="coerce")
+    df = raw[REQUIRED_COLS + (["DES"] if has_des else [])].copy()
+    df["Ship Date"] = pd.to_datetime(df["Ship Date"].astype(str).str.strip(), errors="coerce")
     nat_count = int(df["Ship Date"].isna().sum())
     df = df.dropna(subset=["Ship Date"])
     df["Month"] = df["Ship Date"].dt.strftime("%Y-%m")
-
     df["Category"] = df["Category"].astype(str).str.strip()
     if has_des:
         df["DES"] = df["DES"].astype(str).str.strip()
 
-    def classify_by_des(des_val):
-        des_lower = des_val.lower()
-        return [cat for cat, kws in DES_RULES.items() if any(kw in des_lower for kw in kws)]
+    def by_des(des):
+        d = des.lower()
+        return [c for c, kws in DES_RULES.items() if any(k in d for k in kws)]
 
-    ambiguous_rows = []
+    ambiguous = []
 
-    def normalize_category(row):
+    def norm_cat(row):
         cat = row["Category"]
-        # Case-insensitive + internal-whitespace-insensitive match
-        cat_key = " ".join(cat.upper().split())
-        if cat_key in _VALID_CAT_MAP:
-            return _VALID_CAT_MAP[cat_key]  # return canonical name e.g. "CDR ACC"
+        key = " ".join(cat.upper().split())
+        if key in _VALID_CAT_MAP:
+            return _VALID_CAT_MAP[key]
         if not has_des:
             return "Others"
-        matches = classify_by_des(str(row.get("DES", "")))
-        if len(matches) == 0:
+        hits = by_des(str(row.get("DES", "")))
+        if not hits:
             return "Others"
-        elif len(matches) == 1:
-            return matches[0]
-        else:
-            ambiguous_rows.append({
-                "Part Number": row.get("Part Number", ""),
-                "DES": row.get("DES", ""),
-                "Original Category": cat,
-                "Matched Categories": " / ".join(matches),
-                "Assigned Category": matches[0],
-            })
-            return matches[0]
+        if len(hits) == 1:
+            return hits[0]
+        ambiguous.append({"Part Number": row.get("Part Number", ""),
+                          "DES": row.get("DES", ""),
+                          "Original Category": cat,
+                          "Matched": " / ".join(hits),
+                          "Assigned": hits[0]})
+        return hits[0]
 
-    df["Category"] = df.apply(normalize_category, axis=1)
-
-    df["QTY"] = pd.to_numeric(df["QTY"], errors="coerce").fillna(0)
-    df["SALES Total AMT"] = pd.to_numeric(df["SALES Total AMT"], errors="coerce").fillna(0)
-    df[GP_COL] = pd.to_numeric(df[GP_COL], errors="coerce").fillna(0)
+    df["Category"] = df.apply(norm_cat, axis=1)
+    for col in ["QTY", "SALES Total AMT", GP_COL]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     df["Customer Name"] = df["Customer Name"].astype(str).str.strip()
-    df["Part Number"] = df["Part Number"].astype(str).str.strip()
+    df["Part Number"]   = df["Part Number"].astype(str).str.strip()
+    return df, nat_count, None, ambiguous, has_des
 
-    return df, nat_count, None, ambiguous_rows, has_des
-
-df, nat_count, error_msg, ambiguous_rows, has_des = load_and_clean(uploaded.read())
-
-if error_msg:
-    st.error(error_msg)
-    st.stop()
+df, nat_count, err, ambiguous, has_des = load_and_clean(uploaded.read())
+if err:
+    st.error(err); st.stop()
 if not has_des:
-    st.warning("⚠️ 'DES' column not found. DES-based classification disabled; unknown categories will fall back to Others.")
-if nat_count > 0:
-    st.warning(f"⚠️ {nat_count} row(s) with invalid or blank Ship Date skipped.")
-if ambiguous_rows:
-    st.warning(
-        f"⚠️ {len(ambiguous_rows)} row(s) matched multiple DES categories. "
-        f"Temporarily assigned to '{list(DES_RULES.keys())[0]}'. Please review:"
-    )
-    st.dataframe(pd.DataFrame(ambiguous_rows), use_container_width=True)
+    st.warning("⚠️ 'DES' column not found — DES classification disabled.")
+if nat_count:
+    st.warning(f"⚠️ {nat_count} row(s) with invalid Ship Date skipped.")
+if ambiguous:
+    st.warning(f"⚠️ {len(ambiguous)} row(s) matched multiple DES categories. Assigned to first match:")
+    st.dataframe(pd.DataFrame(ambiguous), use_container_width=True)
 
-# ── 3. Customer search and selection ────────────────────────────
+# ── 3. Customer search ───────────────────────────────────────────
 st.subheader("🔍 Customer Name")
-cust_query = st.text_input("Enter Customer Name keyword (substring, case-insensitive)")
-
+cust_query = st.text_input("Enter keyword (substring, case-insensitive)")
 all_customers = sorted(df["Customer Name"].unique())
-
 if not cust_query.strip():
     st.info("Enter a keyword to search for customers.")
     st.stop()
-
 if st.session_state.get("_last_query") != cust_query:
-    for k in list(st.session_state.keys()):
-        if k.startswith("cust__"):
-            del st.session_state[k]
+    for k in [k for k in st.session_state if k.startswith("cust__")]:
+        del st.session_state[k]
     st.session_state["_last_query"] = cust_query
-
 matched = [c for c in all_customers if cust_query.strip().lower() in c.lower()]
-
 if not matched:
-    st.warning("No matching customers found. Showing 0 rows.")
-    st.stop()
-
-st.markdown(f"**Found {len(matched)} customer(s). Select below:**")
-
-selected_customers = []
-for cust in matched:
-    key = f"cust__{cust}"
-    st.session_state.setdefault(key, True)
-    if st.checkbox(cust, key=key):
-        selected_customers.append(cust)
+    st.warning("No matching customers found."); st.stop()
+st.markdown(f"**Found {len(matched)} customer(s):**")
+selected = []
+for c in matched:
+    st.session_state.setdefault(f"cust__{c}", True)
+    if st.checkbox(c, key=f"cust__{c}"):
+        selected.append(c)
 
 st.divider()
-# ── 4. QTY: Tablet & CDR only ───────────────────────────────────
-use_tablet_cdr_only = st.checkbox("QTY: sum only Tablet & CDR categories (exclude ACC)", value=True)
 
-# ── 5. Category split ────────────────────────────────────────────
-use_cat_split = st.checkbox("Split report by Category", value=True)
-merge_cdr_acc = False
-merge_tablet_acc = False
-if use_cat_split:
-    merge_cdr_acc = st.checkbox("  ↳ Merge CDR ACC into CDR", value=True)
-    merge_tablet_acc = st.checkbox("  ↳ Merge Tablet ACC into Tablet", value=True)
+# ── 4. Options ───────────────────────────────────────────────────
+qty_only = st.checkbox("QTY: sum only Tablet & CDR (exclude ACC)", value=True)
+by_cat   = st.checkbox("Split report by Category", value=True)
+merge_cdr = merge_tab = False
+if by_cat:
+    merge_cdr = st.checkbox("  ↳ Merge CDR ACC into CDR",        value=True)
+    merge_tab = st.checkbox("  ↳ Merge Tablet ACC into Tablet",   value=True)
 
-# Fingerprint of current options — used to detect stale report
-_current_opts = (
-    use_tablet_cdr_only, use_cat_split, merge_cdr_acc, merge_tablet_acc,
-    tuple(sorted(selected_customers))
-)
+_opts = (qty_only, by_cat, merge_cdr, merge_tab, tuple(sorted(selected)))
 
-# ── 6. Aggregation helpers ───────────────────────────────────────
-def build_summary(base, use_tablet_cdr_only):
-    qty_base = base[base["Category"].isin({"Tablet", "CDR"})] if use_tablet_cdr_only else base
+# ── 5. Helpers ───────────────────────────────────────────────────
+def build_summary(base, qty_only):
+    src = base[base["Category"].isin({"Tablet", "CDR"})] if qty_only else base
     agg = base.groupby("Month", sort=True).agg(
         **{"SALES Total AMT": ("SALES Total AMT", "sum"), "final GP(NTD)": (GP_COL, "sum")}
     ).reset_index()
-    qty_all = qty_base.groupby("Month")["QTY"].sum().reset_index().rename(columns={"QTY": "QTY (All)"})
-    return agg.merge(qty_all, on="Month", how="left").fillna({"QTY (All)": 0})
+    qty = src.groupby("Month")["QTY"].sum().reset_index().rename(columns={"QTY": "QTY (All)"})
+    return agg.merge(qty, on="Month", how="left").fillna({"QTY (All)": 0})
 
-
-def build_bycat(base, use_tablet_cdr_only, merge_cdr_acc, merge_tablet_acc):
-    """Build month × category long table.
-    CDR ACC / Tablet ACC appear as separate rows when merge is OFF.
-    QTY counts only original Tablet & CDR rows when use_tablet_cdr_only is True.
-    """
+def build_bycat(base, qty_only, merge_cdr, merge_tab):
     cat_df = base.copy()
-    original_cat = cat_df["Category"].copy()  # snapshot before any merge relabelling
-
-    if merge_cdr_acc:
-        cat_df["Category"] = cat_df["Category"].replace("CDR ACC", "CDR")
-    if merge_tablet_acc:
-        cat_df["Category"] = cat_df["Category"].replace("Tablet ACC", "Tablet")
-
+    orig   = cat_df["Category"].copy()
+    if merge_cdr: cat_df["Category"] = cat_df["Category"].replace("CDR ACC",    "CDR")
+    if merge_tab: cat_df["Category"] = cat_df["Category"].replace("Tablet ACC", "Tablet")
     agg = cat_df.groupby(["Month", "Category"], sort=True).agg(
         **{"SALES Total AMT": ("SALES Total AMT", "sum"), "final GP(NTD)": (GP_COL, "sum")}
     ).reset_index()
-
-    if use_tablet_cdr_only:
-        qty_mask = original_cat.isin({"Tablet", "CDR"})
-    else:
-        qty_mask = pd.Series(True, index=cat_df.index)
-
-    qty_agg = (
-        cat_df[qty_mask].groupby(["Month", "Category"])["QTY"].sum()
-        .reset_index().rename(columns={"QTY": "QTY (All)"})
-    )
-    long = agg.merge(qty_agg, on=["Month", "Category"], how="left")
+    mask = orig.isin({"Tablet", "CDR"}) if qty_only else pd.Series(True, index=cat_df.index)
+    qty  = (cat_df[mask].groupby(["Month", "Category"])["QTY"].sum()
+            .reset_index().rename(columns={"QTY": "QTY (All)"}))
+    long = agg.merge(qty, on=["Month", "Category"], how="left")
     long["QTY (All)"] = long["QTY (All)"].fillna(0)
     return long
 
-
 def to_wide_summary(long_df):
     metrics = ["QTY (All)", "SALES Total AMT", "final GP(NTD)"]
-    melted = long_df.melt(id_vars=["Month"], value_vars=metrics, var_name="Metric", value_name="Value")
-    pivot = melted.pivot_table(index="Metric", columns="Month", values="Value", aggfunc="sum")
-    pivot = pivot.reindex(metrics)
-    pivot.columns.name = None
-    pivot["Total"] = pivot[list(pivot.columns)].sum(axis=1)
-    return pivot.reset_index()
+    m = long_df.melt(id_vars=["Month"], value_vars=metrics, var_name="Metric", value_name="Value")
+    p = m.pivot_table(index="Metric", columns="Month", values="Value", aggfunc="sum").reindex(metrics)
+    p.columns.name = None
+    p["Total"] = p.sum(axis=1)
+    return p.reset_index()
 
-
-def to_wide_bycat(long_df):
-    """Pivot long (Month, Category, metrics) → wide with Row = 'Category | Metric'."""
+def to_wide_one_cat(long_df, cat):
     metrics = ["QTY (All)", "SALES Total AMT", "final GP(NTD)"]
-    melted = long_df.melt(
-        id_vars=["Month", "Category"], value_vars=metrics,
-        var_name="Metric", value_name="Value"
-    )
-    melted["Row"] = melted["Category"] + " | " + melted["Metric"]
-    pivot = melted.pivot_table(index="Row", columns="Month", values="Value", aggfunc="sum")
-    pivot.columns.name = None
-    return pivot.reset_index()
+    sub = long_df[long_df["Category"] == cat]
+    m = sub.melt(id_vars=["Month"], value_vars=metrics, var_name="Metric", value_name="Value")
+    p = m.pivot_table(index="Metric", columns="Month", values="Value", aggfunc="sum").reindex(metrics)
+    p.columns.name = None
+    return p.reset_index()
 
+def fmt(df):
+    nc = [c for c in df.columns if c != df.columns[0]]
+    return df.style.format("{:,.0f}", subset=nc, na_rep="-")
 
-def format_wide(df):
-    label_col = df.columns[0]
-    num_cols = [c for c in df.columns if c != label_col]
-    return df.style.format(formatter="{:,.0f}", subset=num_cols, na_rep="-")
-
-
-def display_bycat_subtables(wide_bycat):
-    row_col = wide_bycat.columns[0]
-    categories = list(dict.fromkeys(wide_bycat[row_col].str.split(" | ").str[0].tolist()))
-    for cat in categories:
+def show_bycat(long_bycat):
+    for cat in list(dict.fromkeys(long_bycat["Category"].tolist())):
         st.markdown(f"**{cat}**")
-        cat_rows = wide_bycat[wide_bycat[row_col].str.startswith(cat + " | ")].copy()
-        cat_rows[row_col] = cat_rows[row_col].str.replace(cat + " | ", "", regex=False)
-        st.dataframe(format_wide(cat_rows.reset_index(drop=True)), use_container_width=True)
+        st.dataframe(fmt(to_wide_one_cat(long_bycat, cat)), use_container_width=True)
 
-# ── 7. Run computation ───────────────────────────────────────────
+# ── 6. Run ───────────────────────────────────────────────────────
 if st.button("▶ Run"):
-    if not selected_customers:
-        st.warning("Please select at least one customer.")
-        st.stop()
-
-    base = df[df["Customer Name"].isin(selected_customers)].copy()
+    if not selected:
+        st.warning("Please select at least one customer."); st.stop()
+    base = df[df["Customer Name"].isin(selected)].copy()
     if base.empty:
-        st.warning("No data found for selected customer(s). Showing 0 rows.")
-        st.stop()
+        st.warning("No data for selected customer(s)."); st.stop()
 
     with st.spinner("Generating report..."):
-        long_summary = build_summary(base, use_tablet_cdr_only)
-        wide_summary = to_wide_summary(long_summary)
-
-        wide_bycat = pd.DataFrame()
-        if use_cat_split:
-            long_bycat = build_bycat(base, use_tablet_cdr_only, merge_cdr_acc, merge_tablet_acc)
-            wide_bycat = to_wide_bycat(long_bycat)
-
-        others_df = base[base["Category"] == "Others"].copy()
+        wide_summary = to_wide_summary(build_summary(base, qty_only))
+        long_bycat   = build_bycat(base, qty_only, merge_cdr, merge_tab) if by_cat else pd.DataFrame()
+        others_df    = base[base["Category"] == "Others"].copy()
 
         buf = io.BytesIO()
-        with pd.ExcelWriter(buf, engine="openpyxl") as writer:
-            wide_summary.to_excel(writer, sheet_name="Summary", index=False)
-            if not wide_bycat.empty:
-                wide_bycat.to_excel(writer, sheet_name="ByCategory", index=False)
+        with pd.ExcelWriter(buf, engine="openpyxl") as w:
+            wide_summary.to_excel(w, sheet_name="Summary", index=False)
+            if not long_bycat.empty:
+                frames = []
+                for cat in long_bycat["Category"].unique():
+                    wc = to_wide_one_cat(long_bycat, cat)
+                    wc.insert(0, "Category", cat)
+                    frames.append(wc)
+                pd.concat(frames, ignore_index=True).to_excel(w, sheet_name="ByCategory", index=False)
         buf.seek(0)
 
-        # ── Diagnostic: pipeline trace (remove after debugging) ──
-        cat_dist = base["Category"].value_counts().reset_index()
-        cat_dist.columns = ["Category", "Row Count"]
-        st.info("🔍 **[D1] Raw category distribution in base:**")
-        st.dataframe(cat_dist, use_container_width=True)
-        st.info(f"🔍 **[D2] merge flags** → merge_cdr_acc={merge_cdr_acc}, merge_tablet_acc={merge_tablet_acc}")
-        if use_cat_split:
-            st.info("🔍 **[D3] long_bycat (first 20 rows):**")
-            st.dataframe(long_bycat.head(20), use_container_width=True)
-            st.info("🔍 **[D4] wide_bycat (all rows):**")
-            st.dataframe(wide_bycat, use_container_width=True)
-        st.session_state["rpt_summary"] = wide_summary
-        st.session_state["rpt_bycat"] = wide_bycat
-        st.session_state["rpt_others"] = others_df
-        st.session_state["rpt_buf"] = buf.getvalue()
-        st.session_state["rpt_has_des"] = has_des
-        st.session_state["rpt_opts"] = _current_opts
+    st.session_state["rpt_summary"]    = wide_summary
+    st.session_state["rpt_long_bycat"] = long_bycat
+    st.session_state["rpt_others"]     = others_df
+    st.session_state["rpt_buf"]        = buf.getvalue()
+    st.session_state["rpt_has_des"]    = has_des
+    st.session_state["rpt_opts"]       = _opts
 
-# ── 8. Display ───────────────────────────────────────────────────
-if "rpt_summary" in st.session_state:
-    if st.session_state.get("rpt_opts") != _current_opts:
-        st.info("ℹ️ Options have changed — press **▶ Run** to refresh the report.")
+# ── 7. Display ───────────────────────────────────────────────────
+if "rpt_summary" not in st.session_state:
+    st.stop()
 
-    _summary = st.session_state["rpt_summary"]
-    _bycat   = st.session_state["rpt_bycat"]
-    _others  = st.session_state["rpt_others"]
-    _buf     = st.session_state["rpt_buf"]
-    _has_des = st.session_state["rpt_has_des"]
+if st.session_state.get("rpt_opts") != _opts:
+    st.info("ℹ️ Options have changed — press **▶ Run** to refresh the report.")
 
-    tab_labels = ["📋 Summary"]
-    if not _bycat.empty:
-        tab_labels.append("📊 ByCategory")
-    tabs = st.tabs(tab_labels)
+_summary    = st.session_state["rpt_summary"]
+_long_bycat = st.session_state["rpt_long_bycat"]
+_others     = st.session_state["rpt_others"]
+_buf        = st.session_state["rpt_buf"]
+_has_des    = st.session_state["rpt_has_des"]
 
-    with tabs[0]:
-        st.dataframe(format_wide(_summary), use_container_width=True)
+tab_labels = ["📋 Summary"]
+if not _long_bycat.empty:
+    tab_labels.append("📊 ByCategory")
+tabs = st.tabs(tab_labels)
 
-    if not _bycat.empty:
-        with tabs[1]:
-            display_bycat_subtables(_bycat)
+with tabs[0]:
+    st.dataframe(fmt(_summary), use_container_width=True)
 
-    if not _others.empty:
-        show_cols = ["Customer Name", "Month", "Part Number", "Category", "QTY", "SALES Total AMT"]
-        if _has_des:
-            show_cols.insert(3, "DES")
-        with st.expander(f"⚠️ Others ({len(_others)} row(s)) — unclassified data, excluded from report"):
-            st.dataframe(_others[show_cols].reset_index(drop=True), use_container_width=True)
+if not _long_bycat.empty:
+    with tabs[1]:
+        show_bycat(_long_bycat)
 
-    filename = datetime.now().strftime("sales_report_%Y%m%d_%H%M.xlsx")
-    st.download_button(
-        label="⬇️ Download Excel Report",
-        data=_buf,
-        file_name=filename,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+if not _others.empty:
+    cols = ["Customer Name", "Month", "Part Number", "Category", "QTY", "SALES Total AMT"]
+    if _has_des:
+        cols.insert(3, "DES")
+    with st.expander(f"⚠️ Others ({len(_others)} row(s)) — unclassified, excluded from report"):
+        st.dataframe(_others[cols].reset_index(drop=True), use_container_width=True)
+
+st.download_button(
+    "⬇️ Download Excel Report",
+    data=_buf,
+    file_name=datetime.now().strftime("sales_report_%Y%m%d_%H%M.xlsx"),
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
