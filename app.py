@@ -207,11 +207,10 @@ def display_bycat_subtables(wide_bycat):
     for cat in categories:
         st.markdown(f"**{cat}**")
         cat_rows = wide_bycat[wide_bycat[row_col].str.startswith(cat + " | ")].copy()
-        # Strip "Category | " prefix → show only the Metric name
         cat_rows[row_col] = cat_rows[row_col].str.replace(f"{cat} | ", "", regex=False)
         st.dataframe(format_wide(cat_rows.reset_index(drop=True)), use_container_width=True)
 
-# ── 7. Generate report ───────────────────────────────────────────
+# ── 7. Run computation ───────────────────────────────────────────
 if st.button("▶ Run"):
     if not selected_customers:
         st.warning("Please select at least one customer.")
@@ -239,7 +238,6 @@ if st.button("▶ Run"):
             long_bycat = build_long(cat_df, qty_base_cat, ["Month", "Category"])
             wide_bycat = to_wide(long_bycat, ["Month", "Category"], add_total=False)
 
-        # Collect Others rows for expander
         others_df = base[base["Category"] == "Others"].copy()
 
         buf = io.BytesIO()
@@ -249,32 +247,44 @@ if st.button("▶ Run"):
                 wide_bycat.to_excel(writer, sheet_name="ByCategory", index=False)
         buf.seek(0)
 
-    # ── Display results in tabs ──────────────────────────────────
+        # ── Persist results so they survive checkbox-triggered reruns ──
+        st.session_state["rpt_summary"] = wide_summary
+        st.session_state["rpt_bycat"] = wide_bycat
+        st.session_state["rpt_others"] = others_df
+        st.session_state["rpt_buf"] = buf.getvalue()
+        st.session_state["rpt_has_des"] = has_des
+
+# ── 8. Display (persists across reruns until next Run) ───────────
+if "rpt_summary" in st.session_state:
+    _summary = st.session_state["rpt_summary"]
+    _bycat = st.session_state["rpt_bycat"]
+    _others = st.session_state["rpt_others"]
+    _buf = st.session_state["rpt_buf"]
+    _has_des = st.session_state["rpt_has_des"]
+
     tab_labels = ["📋 Summary"]
-    if use_cat_split and not wide_bycat.empty:
+    if not _bycat.empty:
         tab_labels.append("📊 ByCategory")
     tabs = st.tabs(tab_labels)
 
     with tabs[0]:
-        st.dataframe(format_wide(wide_summary), use_container_width=True)
+        st.dataframe(format_wide(_summary), use_container_width=True)
 
-    if use_cat_split and not wide_bycat.empty:
+    if not _bycat.empty:
         with tabs[1]:
-            display_bycat_subtables(wide_bycat)
+            display_bycat_subtables(_bycat)
 
-    # ── Others expander ──────────────────────────────────────────
-    if not others_df.empty:
+    if not _others.empty:
         show_cols = ["Customer Name", "Month", "Part Number", "Category", "QTY", "SALES Total AMT"]
-        if has_des:
+        if _has_des:
             show_cols.insert(3, "DES")
-        with st.expander(f"⚠️ Others ({len(others_df)} row(s)) — unclassified data, excluded from report"):
-            st.dataframe(others_df[show_cols].reset_index(drop=True), use_container_width=True)
+        with st.expander(f"⚠️ Others ({len(_others)} row(s)) — unclassified data, excluded from report"):
+            st.dataframe(_others[show_cols].reset_index(drop=True), use_container_width=True)
 
-    # ── Download ─────────────────────────────────────────────────
     filename = datetime.now().strftime("sales_report_%Y%m%d_%H%M.xlsx")
     st.download_button(
         label="⬇️ Download Excel Report",
-        data=buf,
+        data=_buf,
         file_name=filename,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
