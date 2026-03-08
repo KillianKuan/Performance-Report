@@ -12,6 +12,10 @@ REQUIRED_COLS = [
     "Part Number", "Category"
 ]
 VALID_CATEGORIES = {"Tablet", "CDR", "Tablet ACC", "CDR ACC"}
+# Case-insensitive lookup: normalised key → canonical name
+# e.g. "cdr acc" → "CDR ACC",  "tablet acc" → "Tablet ACC"
+_VALID_CAT_MAP = {" ".join(c.upper().split()): c for c in VALID_CATEGORIES}
+
 GP_COL = "final GP(NTD,data from Financial Report)"
 # ── DES keyword classification rules (edit here; sync with page table) ──
 DES_RULES = {
@@ -63,8 +67,10 @@ def load_and_clean(file_bytes):
 
     def normalize_category(row):
         cat = row["Category"]
-        if cat in VALID_CATEGORIES:
-            return cat
+        # Case-insensitive + internal-whitespace-insensitive match
+        cat_key = " ".join(cat.upper().split())
+        if cat_key in _VALID_CAT_MAP:
+            return _VALID_CAT_MAP[cat_key]  # return canonical name e.g. "CDR ACC"
         if not has_des:
             return "Others"
         matches = classify_by_des(str(row.get("DES", "")))
@@ -159,7 +165,6 @@ _current_opts = (
 
 # ── 6. Aggregation helpers ───────────────────────────────────────
 def build_summary(base, use_tablet_cdr_only):
-    """Build month-level summary (no category split)."""
     qty_base = base[base["Category"].isin({"Tablet", "CDR"})] if use_tablet_cdr_only else base
     agg = base.groupby("Month", sort=True).agg(
         **{"SALES Total AMT": ("SALES Total AMT", "sum"), "final GP(NTD)": (GP_COL, "sum")}
@@ -170,33 +175,28 @@ def build_summary(base, use_tablet_cdr_only):
 
 def build_bycat(base, use_tablet_cdr_only, merge_cdr_acc, merge_tablet_acc):
     """Build month × category long table.
-
-    - CDR ACC / Tablet ACC appear as separate rows when merge is OFF.
-    - QTY counts only original Tablet & CDR rows when use_tablet_cdr_only is True.
+    CDR ACC / Tablet ACC appear as separate rows when merge is OFF.
+    QTY counts only original Tablet & CDR rows when use_tablet_cdr_only is True.
     """
     cat_df = base.copy()
-    # Keep original category labels before any merge for QTY masking
-    original_cat = cat_df["Category"].copy()
+    original_cat = cat_df["Category"].copy()  # snapshot before any merge relabelling
 
     if merge_cdr_acc:
         cat_df["Category"] = cat_df["Category"].replace("CDR ACC", "CDR")
     if merge_tablet_acc:
         cat_df["Category"] = cat_df["Category"].replace("Tablet ACC", "Tablet")
 
-    # SALES + GP: aggregate all rows per (Month, Category)
     agg = cat_df.groupby(["Month", "Category"], sort=True).agg(
         **{"SALES Total AMT": ("SALES Total AMT", "sum"), "final GP(NTD)": (GP_COL, "sum")}
     ).reset_index()
 
-    # QTY: count only rows whose ORIGINAL category is Tablet or CDR
     if use_tablet_cdr_only:
         qty_mask = original_cat.isin({"Tablet", "CDR"})
     else:
         qty_mask = pd.Series(True, index=cat_df.index)
 
-    qty_src = cat_df[qty_mask]
     qty_agg = (
-        qty_src.groupby(["Month", "Category"])["QTY"].sum()
+        cat_df[qty_mask].groupby(["Month", "Category"])["QTY"].sum()
         .reset_index().rename(columns={"QTY": "QTY (All)"})
     )
     long = agg.merge(qty_agg, on=["Month", "Category"], how="left")
@@ -210,17 +210,17 @@ def to_wide_summary(long_df):
     pivot = melted.pivot_table(index="Metric", columns="Month", values="Value", aggfunc="sum")
     pivot = pivot.reindex(metrics)
     pivot.columns.name = None
-    month_cols = list(pivot.columns)
-    pivot["Total"] = pivot[month_cols].sum(axis=1)
+    pivot["Total"] = pivot[list(pivot.columns)].sum(axis=1)
     return pivot.reset_index()
 
 
 def to_wide_bycat(long_df):
+    """Pivot long (Month, Category, metrics) → wide with Row = 'Category | Metric'."""
     metrics = ["QTY (All)", "SALES Total AMT", "final GP(NTD)"]
-    long_df = long_df.copy()
-    long_df["Row"] = long_df["Category"] + " | " + long_df.get("_dummy", "")
-    melted = long_df.melt(id_vars=["Month", "Category"], value_vars=metrics,
-                          var_name="Metric", value_name="Value")
+    melted = long_df.melt(
+        id_vars=["Month", "Category"], value_vars=metrics,
+        var_name="Metric", value_name="Value"
+    )
     melted["Row"] = melted["Category"] + " | " + melted["Metric"]
     pivot = melted.pivot_table(index="Row", columns="Month", values="Value", aggfunc="sum")
     pivot.columns.name = None
@@ -234,12 +234,8 @@ def format_wide(df):
 
 
 def display_bycat_subtables(wide_bycat):
-    """Render ByCategory as one small table per Category."""
     row_col = wide_bycat.columns[0]
-    # Extract unique categories preserving order
-    categories = list(dict.fromkeys(
-        wide_bycat[row_col].str.split(" | ").str[0].tolist()
-    ))
+    categories = list(dict.fromkeys(wide_bycat[row_col].str.split(" | ").str[0].tolist()))
     for cat in categories:
         st.markdown(f"**{cat}**")
         cat_rows = wide_bycat[wide_bycat[row_col].str.startswith(cat + " | ")].copy()
@@ -258,20 +254,16 @@ if st.button("▶ Run"):
         st.stop()
 
     with st.spinner("Generating report..."):
-        # Summary
         long_summary = build_summary(base, use_tablet_cdr_only)
         wide_summary = to_wide_summary(long_summary)
 
-        # ByCategory
         wide_bycat = pd.DataFrame()
         if use_cat_split:
             long_bycat = build_bycat(base, use_tablet_cdr_only, merge_cdr_acc, merge_tablet_acc)
             wide_bycat = to_wide_bycat(long_bycat)
 
-        # Others
         others_df = base[base["Category"] == "Others"].copy()
 
-        # Excel export
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as writer:
             wide_summary.to_excel(writer, sheet_name="Summary", index=False)
@@ -279,7 +271,6 @@ if st.button("▶ Run"):
                 wide_bycat.to_excel(writer, sheet_name="ByCategory", index=False)
         buf.seek(0)
 
-        # Persist results + option snapshot
         st.session_state["rpt_summary"] = wide_summary
         st.session_state["rpt_bycat"] = wide_bycat
         st.session_state["rpt_others"] = others_df
@@ -287,16 +278,15 @@ if st.button("▶ Run"):
         st.session_state["rpt_has_des"] = has_des
         st.session_state["rpt_opts"] = _current_opts
 
-# ── 8. Display (persists across reruns until next Run) ───────────
+# ── 8. Display ───────────────────────────────────────────────────
 if "rpt_summary" in st.session_state:
-    # Warn if options have changed since last Run
     if st.session_state.get("rpt_opts") != _current_opts:
         st.info("ℹ️ Options have changed — press **▶ Run** to refresh the report.")
 
     _summary = st.session_state["rpt_summary"]
-    _bycat = st.session_state["rpt_bycat"]
-    _others = st.session_state["rpt_others"]
-    _buf = st.session_state["rpt_buf"]
+    _bycat   = st.session_state["rpt_bycat"]
+    _others  = st.session_state["rpt_others"]
+    _buf     = st.session_state["rpt_buf"]
     _has_des = st.session_state["rpt_has_des"]
 
     tab_labels = ["📋 Summary"]
