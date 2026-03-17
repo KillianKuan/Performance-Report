@@ -1,4 +1,6 @@
 import io
+import json
+import os
 from datetime import datetime
 import pandas as pd
 import streamlit as st
@@ -87,49 +89,90 @@ def load_and_clean(file_bytes, _rules_key):  # _rules_key busts cache when DES_R
     for col in ["QTY", "SALES Total AMT", GP_COL]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
     df["Customer Name"] = df["Customer Name"].astype(str).str.strip()
-    df["Part Number"]   = df["Part Number"].astype(str).str.strip()
+    df["Part Number"]   = (df["Part Number"].astype(str).str.strip()
+                           .replace({"None": "", "nan": "", "NaN": ""}))
     return df, nat_count, None, ambiguous, has_des
 
 df, nat_count, err, ambiguous, has_des = load_and_clean(uploaded.read(), _rules_key())
 if err:
     st.error(err); st.stop()
 
-# ── Apply manual category overrides (from Others reassignment UI) ──
+# ── Overrides: persistent composite-key store ──────────────────
+OVERRIDES_FILE = "overrides.json"
+
+def _save_overrides(ov):
+    """Serialize {tuple_key: category} → JSON file."""
+    try:
+        with open(OVERRIDES_FILE, "w", encoding="utf-8") as f:
+            json.dump([[list(k), v] for k, v in ov.items()], f,
+                      ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def _load_overrides():
+    """Deserialize JSON file → {tuple_key: category}."""
+    try:
+        if os.path.exists(OVERRIDES_FILE):
+            with open(OVERRIDES_FILE, encoding="utf-8") as f:
+                return {tuple(row[0]): row[1] for row in json.load(f)}
+    except Exception:
+        pass
+    return {}
+
 if "others_overrides" not in st.session_state:
-    st.session_state["others_overrides"] = {}
+    st.session_state["others_overrides"] = _load_overrides()
+
 if st.session_state["others_overrides"]:
     df = df.copy()
-    for _idx, _new_cat in st.session_state["others_overrides"].items():
-        if _idx in df.index:
-            df.at[_idx, "Category"] = _new_cat
+    for (cust, pn, month, des), new_cat in st.session_state["others_overrides"].items():
+        if has_des:
+            mask = (
+                (df["Customer Name"] == cust) &
+                (df["Part Number"]   == pn)   &
+                (df["Month"]         == month) &
+                (df["DES"]           == des)
+            )
+        else:
+            mask = (
+                (df["Customer Name"] == cust) &
+                (df["Part Number"]   == pn)   &
+                (df["Month"]         == month)
+            )
+        df.loc[mask, "Category"] = new_cat
 if not has_des:
     st.warning("⚠️ 'DES' column not found — DES classification disabled.")
 if nat_count:
     st.warning(f"⚠️ {nat_count} row(s) with invalid Ship Date skipped.")
 if ambiguous:
-    st.warning(f"⚠️ {len(ambiguous)} row(s) matched multiple DES categories. Assigned to first match:")
-    st.dataframe(pd.DataFrame(ambiguous), use_container_width=True)
+    with st.expander(f"⚠️ {len(ambiguous)} row(s) matched multiple DES categories. Assigned to first match:", expanded=True):
+        st.dataframe(pd.DataFrame(ambiguous), use_container_width=True)
 
 # ── 3. Customer search ───────────────────────────────────────────
 st.subheader("🔍 Customer Name")
 cust_query = st.text_input("Enter keyword (substring, case-insensitive)")
 all_customers = sorted(df["Customer Name"].unique())
-if not cust_query.strip():
+if cust_query.strip():
+    matched = [c for c in all_customers if cust_query.strip().lower() in c.lower()]
+    if not matched:
+        st.warning("No matching customers found.")
+    else:
+        st.markdown(f"**Found {len(matched)} customer(s):**")
+        for c in matched:
+            st.session_state.setdefault(f"cust__{c}", False)
+            st.checkbox(c, key=f"cust__{c}")
+else:
     st.info("Enter a keyword to search for customers.")
-    st.stop()
-if st.session_state.get("_last_query") != cust_query:
-    for k in [k for k in st.session_state if k.startswith("cust__")]:
-        del st.session_state[k]
-    st.session_state["_last_query"] = cust_query
-matched = [c for c in all_customers if cust_query.strip().lower() in c.lower()]
-if not matched:
-    st.warning("No matching customers found."); st.stop()
-st.markdown(f"**Found {len(matched)} customer(s):**")
-selected = []
-for c in matched:
-    st.session_state.setdefault(f"cust__{c}", True)
-    if st.checkbox(c, key=f"cust__{c}"):
-        selected.append(c)
+
+# Selected = all customers checked across all queries (persists between searches)
+selected = [c for c in all_customers if st.session_state.get(f"cust__{c}", False)]
+if selected:
+    st.markdown("**✅ Selected ({}):** {}".format(
+        len(selected), "　".join(f"`{c}`" for c in selected)
+    ))
+    if st.button("🗑 Clear all selections"):
+        for c in all_customers:
+            st.session_state[f"cust__{c}"] = False
+        st.rerun()
 
 st.divider()
 
@@ -172,8 +215,24 @@ def to_wide_summary(long_df):
     m = long_df.melt(id_vars=["Month"], value_vars=metrics, var_name="Metric", value_name="Value")
     p = m.pivot_table(index="Metric", columns="Month", values="Value", aggfunc="sum").reindex(metrics)
     p.columns.name = None
-    p["Total"] = p.sum(axis=1)
-    return p.reset_index()
+    month_cols = list(p.columns)
+    # Yearly subtotals (only when data spans 2+ years)
+    years = sorted(set(c[:4] for c in month_cols))
+    if len(years) > 1:
+        for yr in years:
+            yr_cols = [c for c in month_cols if c.startswith(yr)]
+            p[f"{yr} Total"] = p[yr_cols].sum(axis=1)
+    p["Total"] = p[month_cols].sum(axis=1)
+    result = p.reset_index()
+    # GP% row
+    val_cols = [c for c in result.columns if c != "Metric"]
+    s_vals = result.loc[result["Metric"] == "SALES Total AMT", val_cols].values[0]
+    g_vals = result.loc[result["Metric"] == "final GP(NTD)",   val_cols].values[0]
+    gp_row = pd.DataFrame(
+        [["GP%"] + [f"{g/s*100:.1f}%" if s != 0 else "-" for g, s in zip(g_vals, s_vals)]],
+        columns=["Metric"] + val_cols,
+    )
+    return pd.concat([result, gp_row], ignore_index=True)
 
 def to_wide_one_cat(long_df, cat, all_months):
     """Pivot one category → wide; pad missing months with 0."""
@@ -183,7 +242,16 @@ def to_wide_one_cat(long_df, cat, all_months):
     p   = m.pivot_table(index="Metric", columns="Month", values="Value", aggfunc="sum").reindex(metrics)
     p   = p.reindex(columns=all_months, fill_value=0).fillna(0)
     p.columns.name = None
-    return p.reset_index()
+    result = p.reset_index()
+    # GP% row
+    val_cols = [c for c in result.columns if c != "Metric"]
+    s_vals = result.loc[result["Metric"] == "SALES Total AMT", val_cols].values[0]
+    g_vals = result.loc[result["Metric"] == "final GP(NTD)",   val_cols].values[0]
+    gp_row = pd.DataFrame(
+        [["GP%"] + [f"{g/s*100:.1f}%" if s != 0 else "-" for g, s in zip(g_vals, s_vals)]],
+        columns=["Metric"] + val_cols,
+    )
+    return pd.concat([result, gp_row], ignore_index=True)
 
 def sorted_cats(long_bycat):
     """Return categories in CAT_ORDER; unknowns appended alphabetically."""
@@ -193,8 +261,9 @@ def sorted_cats(long_bycat):
     return ordered
 
 def fmt(df):
-    nc = [c for c in df.columns if c != df.columns[0]]
-    return df.style.format("{:,.0f}", subset=nc, na_rep="0")
+    nc      = [c for c in df.columns if c != df.columns[0]]
+    num_idx = df.index[df.iloc[:, 0] != "GP%"].tolist()
+    return df.style.format("{:,.0f}", subset=pd.IndexSlice[num_idx, nc], na_rep="0")
 
 def show_bycat(long_bycat):
     all_months = sorted(long_bycat["Month"].unique().tolist())
@@ -241,6 +310,8 @@ if "rpt_summary" not in st.session_state:
 
 if st.session_state.get("rpt_opts") != _opts:
     st.info("ℹ️ Options have changed — press **▶ Run** to refresh the report.")
+_report_customers = list(st.session_state["rpt_opts"][4])
+st.markdown("**Customer(s):** " + "　".join(f"`{c}`" for c in _report_customers))
 
 _summary    = st.session_state["rpt_summary"]
 _long_bycat = st.session_state["rpt_long_bycat"]
@@ -272,20 +343,28 @@ if not _others.empty:
                     f"Month: **{_row['Month']}** | AMT: {int(_row['SALES Total AMT']):,}"
                 )
             with _c2:
-                _cur = st.session_state["others_overrides"].get(_i, "Others (keep)")
+                _ok = (
+                    _row["Customer Name"],
+                    _row["Part Number"],
+                    _row["Month"],
+                    _row["DES"] if _has_des else "",
+                )
+                _cur = st.session_state["others_overrides"].get(_ok, "Others (keep)")
                 if _cur not in _override_opts:
                     _cur = "Others (keep)"
                 _choice = st.selectbox(
                     "Reassign",
                     _override_opts,
                     index=_override_opts.index(_cur),
-                    key=f"override_{_i}",
+                    key=f"override_{'__'.join(str(x) for x in _ok)}",
                     label_visibility="collapsed",
                 )
                 if _choice != "Others (keep)":
-                    st.session_state["others_overrides"][_i] = _choice
-                elif _i in st.session_state["others_overrides"]:
-                    del st.session_state["others_overrides"][_i]
+                    st.session_state["others_overrides"][_ok] = _choice
+                    _save_overrides(st.session_state["others_overrides"])
+                elif _ok in st.session_state["others_overrides"]:
+                    del st.session_state["others_overrides"][_ok]
+                    _save_overrides(st.session_state["others_overrides"])
         if st.session_state["others_overrides"]:
             st.info("ℹ️ Overrides set — press **▶ Run** to apply to the report.")
 
