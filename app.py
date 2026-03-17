@@ -93,6 +93,15 @@ def load_and_clean(file_bytes, _rules_key):  # _rules_key busts cache when DES_R
 df, nat_count, err, ambiguous, has_des = load_and_clean(uploaded.read(), _rules_key())
 if err:
     st.error(err); st.stop()
+
+# ── Apply manual category overrides (from Others reassignment UI) ──
+if "others_overrides" not in st.session_state:
+    st.session_state["others_overrides"] = {}
+if st.session_state["others_overrides"]:
+    df = df.copy()
+    for _idx, _new_cat in st.session_state["others_overrides"].items():
+        if _idx in df.index:
+            df.at[_idx, "Category"] = _new_cat
 if not has_des:
     st.warning("⚠️ 'DES' column not found — DES classification disabled.")
 if nat_count:
@@ -252,11 +261,33 @@ if not _long_bycat.empty:
         show_bycat(_long_bycat)
 
 if not _others.empty:
-    cols = ["Customer Name", "Month", "Part Number", "Category", "QTY", "SALES Total AMT"]
-    if _has_des:
-        cols.insert(3, "DES")
-    with st.expander(f"⚠️ Others ({len(_others)} row(s)) — unclassified, excluded from report"):
-        st.dataframe(_others[cols].reset_index(drop=True), use_container_width=True)
+    _override_opts = ["Others (keep)"] + [c for c in CAT_ORDER if c != "Others"]
+    with st.expander(f"⚠️ Others ({len(_others)} row(s)) — review & reassign category"):
+        for _i, _row in _others.iterrows():
+            _c1, _c2 = st.columns([4, 1])
+            with _c1:
+                _des_str = f" | DES: {_row['DES']}" if _has_des else ""
+                st.markdown(
+                    f"`{_row['Part Number']}`{_des_str}&nbsp;&nbsp;"
+                    f"Month: **{_row['Month']}** | AMT: {int(_row['SALES Total AMT']):,}"
+                )
+            with _c2:
+                _cur = st.session_state["others_overrides"].get(_i, "Others (keep)")
+                if _cur not in _override_opts:
+                    _cur = "Others (keep)"
+                _choice = st.selectbox(
+                    "Reassign",
+                    _override_opts,
+                    index=_override_opts.index(_cur),
+                    key=f"override_{_i}",
+                    label_visibility="collapsed",
+                )
+                if _choice != "Others (keep)":
+                    st.session_state["others_overrides"][_i] = _choice
+                elif _i in st.session_state["others_overrides"]:
+                    del st.session_state["others_overrides"][_i]
+        if st.session_state["others_overrides"]:
+            st.info("ℹ️ Overrides set — press **▶ Run** to apply to the report.")
 
 st.download_button(
     "⬇️ Download Excel Report",
