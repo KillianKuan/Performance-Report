@@ -17,8 +17,10 @@ GP_COL           = "final GP(NTD,data from Financial Report)"
 CAT_ORDER        = ["CDR", "CDR ACC", "Tablet", "Tablet ACC", "AI_SW", "Others"]
 DES_RULES = {
     "CDR ACC":    ["cdr", "gemini", "evo", "sprint", "sd card", "panic button",
-                   "iosix", "uvc camera", "k220", "k245", "k265"],
-    "Tablet ACC": ["tablet", "prometheus", "chiron", "hera", "phaeton", "surfing pro", "cradle", "f840"],
+                   "iosix", "uvc camera", "k220", "k245", "k265",
+                   "smart link dongle", "safetycam"],
+    "Tablet ACC": ["tablet", "prometheus", "chiron", "hera", "phaeton", "surfing pro",
+                   "cradle", "f840", "ulmo", "fleet cable"],
     "AI_SW":      ["visionmax"],
 }
 
