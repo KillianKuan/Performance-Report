@@ -1,0 +1,481 @@
+# Sales Report Tool
+
+A Streamlit-based interactive data analysis platform for sales performance reporting with intelligent data normalization and classification.
+
+**Version:** 3.2 | **Status:** Production-ready  
+**Build Date:** April 2026
+
+---
+
+## 📋 Table of Contents
+
+1. [Quick Start](#quick-start)
+2. [Features](#features)
+3. [System Architecture](#system-architecture)
+4. [Data Requirements](#data-requirements)
+5. [Configuration](#configuration)
+6. [Installation & Build](#installation--build)
+7. [Usage](#usage)
+8. [Troubleshooting](#troubleshooting)
+
+---
+
+## ⚡ Quick Start
+
+### For End Users (Packaged Version)
+
+1. **Download & Extract:** Unzip the distributed `SalesReportTool` folder
+2. **Run:** Double-click `SalesReportTool.exe`
+3. **Select Year(s):** Choose data year(s) from the sidebar
+4. **Analyze:** Explore Performance Report, Shipping Record Search, or Company Dashboard
+
+### For Developers (Source Code)
+
+```bash
+# Clone/navigate to workspace
+cd SalesReportTool
+
+# Activate venv
+./venv311/Scripts/Activate.ps1
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run locally
+streamlit run app/app.py
+
+# Build executable
+build.bat
+```
+
+---
+
+## ✨ Features
+
+### Core Functionality
+
+- **Performance Report** — Multi-year sales trends, category breakdowns, margin analysis
+- **Shipping Record Search** — Currency conversion, unit price tracking, cost-per-unit analysis
+- **Company Dashboard** — KPI tracking, YoY comparison, monthly trends, customer rankings
+- **Sales Person Filter** — Sidebar filter to segment data by sales representative (current year)
+
+### Data Intelligence
+
+#### 1. Automatic Category Classification
+- **Direct Matching:** Reads `Category` column with normalization
+- **Keyword-based (DES):** Falls back to `DES` field pattern matching:
+  - CDR ACC: cdr, gemini, evo, sprint, sd card, panic button, iosix, uvc camera, k220, k245, k265, smart link dongle, safetycam
+  - Tablet ACC: tablet, prometheus, chiron, hera, phaeton, surfing pro, cradle, f840, ulmo, fleet cable
+  - AI_SW: visionmax
+  - Others: catch-all
+- **Valid Categories:** `Tablet`, `CDR`, `Tablet ACC`, `CDR ACC`, `AI_SW`, `Others`
+
+#### 2. Name Normalization (v3.2+)
+Automatically normalizes customer names and sales person names to handle variations:
+
+**Customer Names:**
+- Removes punctuation (commas, periods)
+- Compresses whitespace
+- Converts to UPPERCASE
+- Optionally applies alias maps (see [Configuration](#configuration))
+
+**Sales Person:**
+- Removes punctuation
+- Compresses whitespace
+- Converts to Title Case
+- Optionally applies alias maps
+
+**Example:**
+```
+"AZUGA, INC."  →  "AZUGA INC"
+"azuga  inc"   →  "AZUGA INC"
+"Killian Chen" →  "Killian Chen"
+"killian"      →  (optional alias) "Killian Chen"
+```
+
+#### 3. Override System
+Store custom category overrides in `app/overrides.json` using composite keys:
+```json
+{
+  "[\"Customer\", \"PN\", \"2026-01\", \"DES Description\"]": "Tablet ACC"
+}
+```
+- Persists across sessions
+- Keyed by: Customer Name, Part Number, Month, DES (if present)
+- Applied after initial classification
+
+---
+
+## 🏗️ System Architecture
+
+### Directory Structure
+
+```
+SalesReportTool/
+├── app/
+│   ├── app.py              # Main Streamlit application
+│   ├── charts.py           # Chart generation functions
+│   ├── utils.py            # Data loading, classification, report helpers
+│   ├── aliases.json        # Name alias mappings (customer, sales_person)
+│   └── overrides.json      # Category overrides (auto-generated)
+├── data/
+│   ├── 2024/
+│   │   └── sales_2024.xlsx
+│   ├── 2025/
+│   └── 2026/
+├── assets/
+│   └── app.ico
+├── launcher.py             # PyInstaller entry point
+├── build.bat               # Build script (Windows)
+├── SalesReportTool.spec    # PyInstaller configuration
+├── requirements.txt        # Python dependencies
+└── README.md              # This file
+```
+
+### Data Flow
+
+```
+[Excel Files] 
+    ↓
+load_single_file()
+    ├─ Parse & validate columns
+    ├─ Normalize Customer Name + SALE_Person
+    ├─ Apply alias maps
+    ├─ Classify Category (direct → DES keyword → Others)
+    └─ Return DataFrame
+    ↓
+[Merged DataFrame]
+    ↓
+apply_overrides()
+    └─ Replace Category for matching rows
+    ↓
+[Streamlit Tabs]
+    ├─ Performance Report
+    ├─ Shipping Record Search
+    └─ Company Dashboard
+```
+
+### Normalization Functions (in `utils.py`)
+
+```python
+_normalize_name(name, upper=True)
+  └─ Remove punctuation, compress whitespace, unify case
+
+normalize_customer_name(name)
+  └─ _normalize_name() + alias mapping
+
+normalize_sales_person(name)
+  └─ _normalize_name(upper=False) + alias mapping
+
+_load_aliases(kind: "customer" | "sales_person")
+  └─ Load from app/aliases.json
+```
+
+---
+
+## 📊 Data Requirements
+
+### Required Columns (exact names)
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `Customer Name` | string | Will be normalized |
+| `Ship Date` | date | Parsed with fault tolerance; NaT rows skipped |
+| `QTY` | numeric | Quantity (used for CDR/Tablet categories) |
+| `SALES Total AMT` | numeric | Revenue in TWD |
+| `final GP(NTD,data from Financial Report)` | numeric | Gross Profit in TWD |
+| `Part Number` | string | Product identifier |
+| `Category` | string | Direct category or fallback destination |
+
+### Optional Columns
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `DES` | string | Product description for keyword-based classification |
+| `SALE_Person` | string | Sales rep name (will be normalized) |
+| `Currency` | string | Used in Shipping Record Search |
+| `UP` | numeric | Unit Price |
+| `TP(USD)` | numeric | Total Price in USD |
+
+### File Format
+
+- **Format:** `.xlsx` (Excel 2007+)
+- **Sheet:** Must contain `Actual` sheet
+- **Location:** `data/{YEAR}/` (e.g., `data/2024/sales_2024.xlsx`)
+- **Loading:** Latest modified `.xlsx` per year folder is auto-selected
+
+### Data Exclusions
+
+Customers in `EXCLUDED_CUSTOMERS` set are automatically filtered:
+```python
+EXCLUDED_CUSTOMERS = {"MITAC Computer(Kunshan) Co.,Ltd"}
+```
+Modify in `utils.py` to add/remove excluded customers.
+
+---
+
+## ⚙️ Configuration
+
+### 1. Category Classification Rules
+
+Edit `DES_RULES` in [app/utils.py](app/utils.py):
+
+```python
+DES_RULES = {
+    "CDR ACC": ["cdr", "gemini", "evo", ...],
+    "Tablet ACC": ["tablet", "prometheus", ...],
+    "AI_SW": ["visionmax"],
+}
+```
+
+When `Category` is empty/invalid, keywords from `DES` field are matched (substring, case-insensitive).
+
+### 2. Name Aliases
+
+Create or edit [app/aliases.json](app/aliases.json):
+
+```json
+{
+  "customer": {
+    "AZUGA INC": "AZUGA, Inc.",
+    "KILLIAN": "Killian Chen"
+  },
+  "sales_person": {
+    "KILLIAN": "Killian Chen",
+    "JASON TAN": "Jason Tan"
+  }
+}
+```
+
+**Format:**
+- After normalization (uppercase for customer, Title Case for sales), apply these mappings
+- Use normalized form as the key
+- Value is the canonical name to use
+
+### 3. Category Overrides
+
+[app/overrides.json](app/overrides.json) is auto-generated when you adjust categories in the UI. Manual entries:
+
+```json
+{
+  "[\"Company A\", \"PN-001\", \"2026-01\", \"Some Product Desc\"]": "Tablet"
+}
+```
+
+Keys are JSON arrays: `[Customer, Part Number, Month (YYYY-MM), DES]`
+
+---
+
+## 🔧 Installation & Build
+
+### Prerequisites
+
+- **Windows 10+** (build script targets Windows)
+- **Python 3.11+** (venv at `venv311/`)
+- **pip** (for dependency installation)
+
+### Dependencies
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| streamlit | ≥1.32.0 | Web framework |
+| pandas | ≥2.0.0 | Data manipulation |
+| openpyxl | ≥3.1.0 | Excel reading (fallback) |
+| pyinstaller | ≥6.0.0 | Executable packaging |
+| python-calamine | ≥0.3.0 | Fast Excel reading (primary) |
+
+See [requirements.txt](requirements.txt) for complete list.
+
+### Build Process
+
+Run `build.bat`:
+
+```batch
+@echo off
+REM [1/5] Install dependencies
+REM [2/5] Clean old output
+REM [3/5] PyInstaller: launcher.py → SalesReportTool.exe
+REM [4/5] Copy app\ and data\ folders
+REM [5/5] Verify output
+```
+
+**Output:** `dist/SalesReportTool/`
+
+**Distribution:** Zip the entire `dist/SalesReportTool/` folder for end users.
+
+### Development Workflow
+
+```bash
+# After modifying app.py
+python -m streamlit run app/app.py
+
+# After modifying utils.py or adding dependencies
+pip install -r requirements.txt
+python -m streamlit run app/app.py
+
+# After modifying launcher.py
+build.bat
+
+# Small fixes (e.g., app.py only)
+# → Replace dist/SalesReportTool/app/app.py directly, no rebuild needed
+```
+
+---
+
+## 🎯 Usage
+
+### Command Line
+
+```bash
+# Development
+streamlit run app/app.py
+
+# With port override
+streamlit run app/app.py --server.port 8502
+
+# Frozen (from built executable)
+SalesReportTool.exe
+```
+
+### UI Workflow
+
+1. **Sidebar — Year Selection:**
+   - Multi-select years to analyze
+   - File auto-discovery from `data/{YEAR}/` folders
+
+2. **Sidebar — Sales Person Filter (optional):**
+   - Filter by sales rep (current year only)
+   - Shows related customers
+
+3. **Main Tabs:**
+
+   **📄 Performance Report**
+   - Summary metrics by month
+   - Category breakdowns (stacked trends, donut charts)
+   - Margin % (GP / Sales)
+   - YoY comparison (if available)
+
+   **🚚 Shipping Record Search**
+   - Currency conversion
+   - Unit price & quantity analysis
+   - Requires: `Currency`, `UP`, `TP(USD)` columns
+
+   **📊 Company Dashboard**
+   - KPI cards (Total Sales, GP, GP%, Avg Order)
+   - Monthly trend (revenue & quantity)
+   - Category breakdown (pie + stacked bar)
+   - Top 10 customers (bar chart)
+   - Customer detail drill-down
+   - Monthly trends by category
+
+### Export Data
+
+- Click **"📋 Download as CSV"** on report tables
+- Charts: Right-click → Save as image (browser dependent)
+
+---
+
+## 🆘 Troubleshooting
+
+### Issue: "Data folder not found"
+
+**Cause:** Missing or empty `data/` directory  
+**Fix:** Create `data/2024/`, `data/2025/`, etc., and place `.xlsx` files inside
+
+### Issue: "No .xlsx files found in year folders"
+
+**Cause:** Excel files in wrong location or wrong extension  
+**Fix:** Ensure files are in `data/{YEAR}/*.xlsx` format
+
+### Issue: "'DES' column not found; DES classification disabled"
+
+**Cause:** Your Excel file doesn't have a `DES` column  
+**Fix:** Either add the column or accept category fallback to "Others"
+
+### Issue: "SALE_Person' column not found; Sales Person filter disabled"
+
+**Cause:** Your Excel file doesn't have `SALE_Person` column  
+**Fix:** Optional; add the column if you want sales rep filtering
+
+### Issue: "X row(s) with invalid Ship Date skipped"
+
+**Cause:** Unparseable dates in `Ship Date` column  
+**Fix:** Ensure all dates are in recognizable format (e.g., YYYY-MM-DD, MM/DD/YYYY)
+
+### Issue: Customer/Sales Person names not normalizing
+
+**Cause:** Aliases not configured or names not found  
+**Check:**
+1. [app/aliases.json](app/aliases.json) has the mapping
+2. Key is in normalized form: uppercase for customer, Title Case for sales
+3. Reload browser/restart app after editing `aliases.json`
+
+### Issue: Build fails with "PyInstaller not found"
+
+**Cause:** `pyinstaller` not installed  
+**Fix:** Run `pip install -r requirements.txt` before `build.bat`
+
+### Issue: "calamine" or "python_calamine" import errors
+
+**Cause:** Dependency not installed  
+**Fix:** Auto-handled; `openpyxl` fallback used if `calamine` unavailable
+
+---
+
+## 📝 Change Log
+
+### v3.2 (April 2026)
+- ✨ **Name Normalization System**
+  - Auto-normalize Customer Name & Sales Person
+  - Configurable alias maps via `aliases.json`
+  - Handles punctuation, whitespace, case variations
+- 🔧 **Build Process Improvements**
+  - Added `python-calamine` to requirements (faster Excel reading)
+  - Added `pyinstaller` to explicit dependencies
+  - Archived deprecated `啟動程式.spec`
+
+### v3.1 (Earlier)
+- Category classification with DES keyword matching
+- Shipping Record Search tab
+- Company Dashboard with KPIs
+- Override system for manual corrections
+- Multi-year data support
+
+---
+
+## 👥 Developer Notes
+
+### Key Decision Rationale
+
+**Name Normalization:**
+- Customer names often have punctuation/case variations across different sheets
+- Sales person names may be entered inconsistently
+- Normalizing at load-time ensures consistent filtering and aggregation
+
+**Composite Keys (overrides.json):**
+- Avoids index shift issues when Excel files are reorganized
+- Part Number + Month + DES + Customer → unique product transaction row
+
+**Lazy Alias Loading:**
+- `_load_aliases()` reads JSON on every `normalize_*()` call
+- No caching needed; file updates immediately reflected after app restart
+
+**Calamine + openpyxl Fallback:**
+- `calamine` (Rust-based) is ~5–10x faster for large sheets
+- `openpyxl` (pure Python) is more widely available, used as fallback
+
+### Session State Management
+
+- **`others_overrides`:** Loaded at startup; any UI edits saved to `overrides.json`
+- **`sp_cust__*`:** Sales Person related customer checkboxes (UI-only)
+- **File Cache:** `@st.cache_data` on `load_single_file()` using `_rules_key()` for DES_RULES version
+
+---
+
+## 📄 License & Contact
+
+*For internal use. Contact project maintainer for distribution.*
+
+---
+
+**Last Updated:** 2026-04-12

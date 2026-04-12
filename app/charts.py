@@ -186,6 +186,26 @@ def chart_category_stacked(monthly_cat_df):
     )
 
 
+def chart_customer_qty_by_cat(monthly_qty_cat_df: pd.DataFrame) -> alt.Chart:
+    """Grouped bar chart: monthly QTY by Category for drill-down."""
+    return (
+        alt.Chart(monthly_qty_cat_df)
+        .mark_bar()
+        .encode(
+            x=alt.X("Month:N", title="Month", sort=None),
+            y=alt.Y("QTY:Q", title="QTY",
+                     axis=alt.Axis(format=",.0f")),
+            color=alt.Color("Category:N", scale=_cat_color_scale(),
+                           legend=alt.Legend(title="Category")),
+            xOffset=alt.XOffset("Category:N"),
+            tooltip=[
+                "Month:N", "Category:N",
+                alt.Tooltip("QTY:Q", format=",")
+            ],
+        )
+    )
+
+
 def chart_ai_sw_revenue_trend(monthly_cat_df: pd.DataFrame) -> alt.Chart:
     """AI_SW monthly revenue line chart."""
     ai_sw = monthly_cat_df[monthly_cat_df["Category"] == "AI_SW"].copy()

@@ -166,6 +166,10 @@ def load_single_file(file_path: str, rules_key):
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
         df["Currency"] = df["Currency"].astype(str).str.strip()
     df["Customer Name"] = df["Customer Name"].astype(str).str.strip()
+    df["Customer Name"] = df["Customer Name"].apply(normalize_customer_name)
+    if has_sp:
+        df["SALE_Person"] = df["SALE_Person"].astype(str).str.strip()
+        df["SALE_Person"] = df["SALE_Person"].apply(normalize_sales_person)
     df = df[~df["Customer Name"].isin(["nan", "NaN", ""])]
     df["Part Number"] = (
         df["Part Number"].astype(str).str.strip()
@@ -368,6 +372,23 @@ def build_monthly_category(df):
     agg = m.groupby(["Month", "Category"], sort=True).agg(
         Revenue=("SALES Total AMT", "sum"),
     ).reset_index()
+    return agg
+
+
+def build_customer_monthly_qty_by_cat(df: pd.DataFrame) -> pd.DataFrame:
+    """Monthly QTY grouped by Category for a customer subset.
+    Returns DataFrame with columns: Month, Category, QTY.
+    """
+    m = df.copy()
+    m["Month"] = m["Ship Date"].dt.strftime("%Y-%m")
+    agg = (
+        m.groupby(["Month", "Category"], sort=True)["QTY"]
+        .sum()
+        .reset_index()
+    )
+    cat_rank = {c: i for i, c in enumerate(CAT_ORDER)}
+    agg["_rank"] = agg["Category"].map(cat_rank).fillna(len(CAT_ORDER))
+    agg = agg.sort_values(["Month", "_rank"]).drop(columns=["_rank"]).reset_index(drop=True)
     return agg
 
 

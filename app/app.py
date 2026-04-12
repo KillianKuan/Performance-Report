@@ -1,4 +1,4 @@
-﻿"""app.py ??Performance Report Analysis Tool (v7.2)."""
+﻿"""app.py - Performance Report Analysis Tool (v7.2)."""
 
 import io
 import os
@@ -25,17 +25,24 @@ from utils import (
     EXCLUDED_CUSTOMERS,
     calc_dashboard_kpis, build_monthly_trend,
     build_category_breakdown, build_monthly_category,
-    build_top_customers, build_customer_detail, build_pn_detail,
+    build_top_customers, build_customer_detail,
+    build_customer_monthly_qty_by_cat,
+    build_pn_detail,
 )
 from charts import (
     chart_up_tp_trend, chart_qty_by_year, chart_qty_by_month, chart_gp_pct_trend,
     chart_revenue_trend, chart_gp_dual_axis,
     chart_category_donut, chart_category_stacked, chart_ai_sw_revenue_trend,
     chart_top_customers_bar, chart_customer_monthly, chart_customer_cat_donut,
+    chart_customer_qty_by_cat,
 )
 
-st.set_page_config(page_title="Performance Report Analysis Tool", layout="wide")
-st.title("?? Performance Report Data Analysis Tool")
+st.set_page_config(
+    page_title="Performance Report Analysis Tool",
+    page_icon="📊",
+    layout="wide",
+)
+st.title("📊 Performance Report Data Analysis Tool")
 
 def inject_heartbeat() -> None:
     """Ping the launcher so it can close when the browser tab goes away."""
@@ -91,7 +98,7 @@ available_years = sorted(year_folders.keys(), reverse=True)
 current_year = datetime.now().year
 default_years = [current_year] if current_year in available_years else [available_years[-1]]
 
-st.sidebar.header("?? Year Selection")
+st.sidebar.header("📅 Year Selection")
 selected_years = st.sidebar.multiselect(
     "Select years to analyze",
     options=available_years,
@@ -111,7 +118,7 @@ for yr in selected_years:
 
 missing_years = [yr for yr in selected_years if yr not in file_map]
 if missing_years:
-    st.warning(f"?? No .xlsx files found in year folders: {missing_years}")
+    st.warning(f"⚠️ No .xlsx files found in year folders: {missing_years}")
 if not file_map:
     st.error("No usable .xlsx files found for any of the selected years.")
     st.stop()
@@ -129,7 +136,7 @@ for yr in sorted(file_map):
         str(fp), _rules_key()
     )
     if err_yr:
-        st.error(f"??{err_yr}")
+        st.error(f"❌ {err_yr}")
         continue
     all_dfs.append(df_yr)
     total_nat += nat_yr
@@ -179,7 +186,7 @@ if "SALE_Person" in df.columns:
         if sp not in ("nan", "NaN", "")
     )
     if _sp_names:
-        st.sidebar.header("? Sales Person")
+        st.sidebar.header("👤 Sales Person")
         _sel_persons = st.sidebar.multiselect(
             "Filter by Sales Person (current year)",
             options=_sp_names,
@@ -193,13 +200,13 @@ if "SALE_Person" in df.columns:
             )
             if _sp_custs:
                 _sp_visible_custs = set(_sp_custs)
-                st.sidebar.markdown(f"**?? Related Customers ({len(_sp_custs)}):**")
+                st.sidebar.markdown(f"**🔗 Related Customers ({len(_sp_custs)}):**")
                 for c in _sp_custs:
                     st.session_state.setdefault(f"sp_cust__{c}", False)
                     st.sidebar.checkbox(c, key=f"sp_cust__{c}")
 
 # ?? Sidebar: System Info ???????????????????????????????????????
-with st.sidebar.expander("?? System Info", expanded=False):
+with st.sidebar.expander("ℹ️ System Info", expanded=False):
     st.markdown(f"**Loaded {len(df):,} rows** ({len(file_map)} year(s))")
     for yr in sorted(file_map):
         f = file_map[yr]
@@ -209,14 +216,14 @@ with st.sidebar.expander("?? System Info", expanded=False):
             unsafe_allow_html=True,
         )
     if not has_des:
-        st.warning("'DES' column not found ??DES classification disabled.")
+        st.warning("'DES' column not found; DES classification disabled.")
     if not has_shipping:
         st.warning(
-            "'Currency'/'UP'/'TP(USD)' columns not found ??"
+            "'Currency'/'UP'/'TP(USD)' columns not found; "
             "Shipping Record Search disabled."
         )
     if "SALE_Person" not in df.columns:
-        st.warning("'SALE_Person' column not found ??Sales Person filter disabled.")
+        st.warning("'SALE_Person' column not found; Sales Person filter disabled.")
     if total_nat:
         st.warning(f"{total_nat} row(s) with invalid Ship Date skipped.")
     if all_ambiguous:
@@ -249,12 +256,12 @@ if _yoy_year in year_folders:
 # MAIN TABS
 # ??????????????????????????????????????????????????????????????
 main_tab1, main_tab2, main_tab3 = st.tabs(
-    ["?? Performance Report", "?? Shipping Record Search", "? Company Dashboard"]
+    ["📄 Performance Report", "🚚 Shipping Record Search", "📊 Company Dashboard"]
 )
 
 # ?? TAB 1: Performance Report ????????????????????????????????????
 with main_tab1:
-    st.subheader("?? Customer Name")
+    st.subheader("🔎 Customer Name")
     cust_query = st.text_input("Enter keyword (substring, case-insensitive)")
     all_customers = sorted(df["Customer Name"].dropna().unique())
     if cust_query.strip():
@@ -277,11 +284,11 @@ with main_tab1:
     selected = sorted(set(selected_keyword + selected_sp))
     if selected:
         st.markdown(
-            "**??Selected ({}):** {}".format(
+            "**Selected ({}):** {}".format(
                 len(selected), "\u3000".join(f"`{c}`" for c in selected)
             )
         )
-        if st.button("?? Clear all selections"):
+        if st.button("🧹 Clear all selections"):
             for c in all_customers:
                 st.session_state.pop(f"cust__{c}", None)
                 st.session_state.pop(f"sp_cust__{c}", None)
@@ -293,12 +300,12 @@ with main_tab1:
     by_cat = st.checkbox("Split report by Category", value=True)
     merge_cdr = merge_tab = False
     if by_cat:
-        merge_cdr = st.checkbox("  ??Merge CDR ACC into CDR", value=True)
-        merge_tab = st.checkbox("  ??Merge Tablet ACC into Tablet", value=True)
+        merge_cdr = st.checkbox("  ↪ Merge CDR ACC into CDR", value=True)
+        merge_tab = st.checkbox("  ↪ Merge Tablet ACC into Tablet", value=True)
 
     _opts = (qty_only, by_cat, merge_cdr, merge_tab, tuple(sorted(selected)))
 
-    if st.button("??Run"):
+    if st.button("▶ Run"):
         if not selected:
             st.warning("Please select at least one customer.")
         else:
@@ -338,7 +345,7 @@ with main_tab1:
 
     if "rpt_summary" in st.session_state:
         if st.session_state.get("rpt_opts") != _opts:
-            st.info("?對? Options have changed ??press **??Run** to refresh the report.")
+            st.info("Options have changed; press **▶ Run** to refresh the report.")
         _report_customers = list(st.session_state["rpt_opts"][4])
         st.markdown(
             "**Customer(s):** "
@@ -351,9 +358,9 @@ with main_tab1:
         _buf = st.session_state["rpt_buf"]
         _has_des = st.session_state["rpt_has_des"]
 
-        tab_labels = ["?? Summary"]
+        tab_labels = ["📋 Summary"]
         if not _long_bycat.empty:
-            tab_labels.append("?? ByCategory")
+            tab_labels.append("🗂️ By Category")
         tabs = st.tabs(tab_labels)
 
         with tabs[0]:
@@ -368,7 +375,7 @@ with main_tab1:
                 c for c in CAT_ORDER if c != "Others"
             ]
             with st.expander(
-                f"?? Others ({len(_others)} row(s)) ??review & reassign category"
+                f"⚠️ Others ({len(_others)} row(s)) - review & reassign category"
             ):
                 for _i, _row in _others.iterrows():
                     _c1, _c2 = st.columns([4, 1])
@@ -406,11 +413,11 @@ with main_tab1:
                             save_overrides(st.session_state["others_overrides"])
                 if st.session_state["others_overrides"]:
                     st.info(
-                        "?對? Overrides set ??press **??Run** to apply to the report."
+                        "Overrides updated; press **▶ Run** to apply them to the report."
                     )
 
         st.download_button(
-            "漎? Download Excel Report",
+            "📥 Download Excel Report",
             data=_buf,
             file_name=datetime.now().strftime("sales_report_%Y%m%d_%H%M.xlsx"),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -424,13 +431,13 @@ with main_tab2:
             "columns in the data files. These columns were not found."
         )
     else:
-        st.subheader("?? Search by Part Number")
+        st.subheader("🔎 Search by Part Number")
 
         # ?? Search history (quick-select) ??
         if "search_history" not in st.session_state:
             st.session_state["search_history"] = []
         if st.session_state["search_history"]:
-            st.caption("?? Recent searches")
+            st.caption("🕘 Recent searches")
             _hist_cols = st.columns(
                 min(len(st.session_state["search_history"]), 5)
             )
@@ -540,7 +547,7 @@ with main_tab2:
                 # ?? Charts (3 columns, all Altair) ??
                 _cc1, _cc2, _cc3 = st.columns(3)
                 with _cc1:
-                    st.markdown("**?? UP & TP(USD) Monthly Trend**")
+                    st.markdown("**📈 UP & TP(USD) Monthly Trend**")
                     st.altair_chart(
                         chart_up_tp_trend(results),
                         use_container_width=True,
@@ -554,19 +561,19 @@ with main_tab2:
                         label_visibility="collapsed",
                     )
                     if _qty_mode == "By Year":
-                        st.markdown("**?? QTY by Year**")
+                        st.markdown("**📊 QTY by Year**")
                         st.altair_chart(
                             chart_qty_by_year(results),
                             use_container_width=True,
                         )
                     else:
-                        st.markdown("**?? QTY by Month**")
+                        st.markdown("**📊 QTY by Month**")
                         st.altair_chart(
                             chart_qty_by_month(results),
                             use_container_width=True,
                         )
                 with _cc3:
-                    st.markdown("**?? GP% Monthly Trend**")
+                    st.markdown("**📉 GP% Monthly Trend**")
                     st.altair_chart(
                         chart_gp_pct_trend(results),
                         use_container_width=True,
@@ -613,7 +620,7 @@ with main_tab2:
                 # ?? Part Number summary table (when customer filter active) ??
                 if _cust_filter_active:
                     st.divider()
-                    st.markdown("**?? Part Number Summary**")
+                    st.markdown("**📋 Part Number Summary**")
                     if has_des and "DES" in results.columns:
                         _grp_df = results.copy()
                         _grp_df["DES"] = _grp_df["DES"].fillna("")
@@ -655,7 +662,7 @@ with main_tab3:
     _kpis_all = calc_dashboard_kpis(dash_df)
 
     # ?? Section 1: KPI Metric Cards ??
-    st.subheader("?? Overview")
+    st.subheader("📌 Overview")
     if dash_yoy is not None:
         st.caption(f"YoY delta: {_dash_max_yr} vs {_dash_max_yr - 1}")
 
@@ -665,38 +672,38 @@ with main_tab3:
         return f"{val:+,.1f}{suffix}"
 
     _k1, _k2, _k3, _k4, _k5, _k6 = st.columns(6)
-    _k1.metric("? Revenue", f"{_kpis_all['revenue']:,.0f}",
+    _k1.metric("💰 Revenue", f"{_kpis_all['revenue']:,.0f}",
                delta=_fmt_delta(_kpis_yoy["revenue_yoy"]))
-    _k2.metric("?? GP", f"{_kpis_all['gp']:,.0f}",
+    _k2.metric("💵 GP", f"{_kpis_all['gp']:,.0f}",
                delta=_fmt_delta(_kpis_yoy["gp_yoy"]))
-    _k3.metric("?? GP%", f"{_kpis_all['gp_pct']:.1f}%",
+    _k3.metric("📈 GP%", f"{_kpis_all['gp_pct']:.1f}%",
                delta=_fmt_delta(_kpis_yoy["gp_pct_yoy"], " ppt"))
-    _k4.metric("? QTY (CDR+Tablet)", f"{_kpis_all['qty']:,.0f}",
+    _k4.metric("📦 QTY (CDR+Tablet)", f"{_kpis_all['qty']:,.0f}",
                delta=_fmt_delta(_kpis_yoy["qty_yoy"]))
     _k5.metric(
-        "? Customers", f"{_kpis_all['customers']:,}",
+        "👥 Customers", f"{_kpis_all['customers']:,}",
         delta=(
             f"{_kpis_yoy['customers_yoy']:+,}"
             if _kpis_yoy["customers_yoy"] is not None else "N/A"
         ),
     )
-    _k6.metric("? Categories", f"{_kpis_all['active_cats']}")
+    _k6.metric("🗂️ Categories", f"{_kpis_all['active_cats']}")
 
     st.divider()
 
     # ?? Section 2: Monthly Trends ??
-    st.subheader("?? Monthly Trends")
+    st.subheader("📈 Monthly Trends")
     _trend = build_monthly_trend(dash_df)
     _multi_yr = len(selected_years) > 1
     _tr1, _tr2 = st.columns(2)
     with _tr1:
-        st.markdown("**?? Monthly Revenue Trend**")
+        st.markdown("**📈 Monthly Revenue Trend**")
         st.altair_chart(
             chart_revenue_trend(_trend, multi_year=_multi_yr),
             use_container_width=True,
         )
     with _tr2:
-        st.markdown("**?? Monthly GP & GP% Trend**")
+        st.markdown("**📉 Monthly GP & GP% Trend**")
         st.altair_chart(
             chart_gp_dual_axis(_trend),
             use_container_width=True,
@@ -705,22 +712,22 @@ with main_tab3:
     st.divider()
 
     # ?? Section 3: Category Analysis ??
-    st.subheader("?儭?Category Analysis")
+    st.subheader("🧩 Category Analysis")
     _cat_br = build_category_breakdown(dash_df)
     _cat_mo = build_monthly_category(dash_df)
     _ca1, _ca2, _ca3 = st.columns(3)
     with _ca1:
-        st.markdown("**?尼 Revenue by Category**")
+        st.markdown("**🍩 Revenue by Category**")
         st.altair_chart(
             chart_category_donut(_cat_br), use_container_width=True,
         )
     with _ca2:
-        st.markdown("**?? Category Revenue Trend**")
+        st.markdown("**📊 Category Revenue Trend**")
         st.altair_chart(
             chart_category_stacked(_cat_mo), use_container_width=True,
         )
     with _ca3:
-        st.markdown("**?? AI_SW Monthly Revenue Trend**")
+        st.markdown("**🤖 AI_SW Monthly Revenue Trend**")
         st.altair_chart(
             chart_ai_sw_revenue_trend(_cat_mo), use_container_width=True,
         )
@@ -728,19 +735,19 @@ with main_tab3:
     st.divider()
 
     # ?? Section 4: Top N Customers ??
-    st.subheader("?? Top Customers")
+    st.subheader("🏆 Top Customers")
     _top_n = st.slider(
         "Number of customers", 5, 30, 10, key="dash_top_n",
     )
     _top = build_top_customers(dash_df, _top_n, dash_yoy)
     _tn1, _tn2 = st.columns(2)
     with _tn1:
-        st.markdown(f"**?? Top {_top_n} Customers by Revenue**")
+        st.markdown(f"**🏆 Top {_top_n} Customers by Revenue**")
         st.altair_chart(
             chart_top_customers_bar(_top), use_container_width=True,
         )
     with _tn2:
-        st.markdown(f"**?? Top {_top_n} Customers**")
+        st.markdown(f"**📋 Top {_top_n} Customers**")
 
         def _gp_color(val):
             try:
@@ -765,7 +772,7 @@ with main_tab3:
     st.divider()
 
     # ?? Section 5: Customer Drill-Down ??
-    st.subheader("?? Customer Drill-Down")
+    st.subheader("🔍 Customer Drill-Down")
     _all_dash_custs = sorted(dash_df["Customer Name"].dropna().unique())
     _top_names = _top["Customer Name"].tolist()
 
@@ -816,20 +823,31 @@ with main_tab3:
             if not _dm.empty and not _dcat.empty:
                 _ddc1, _ddc2 = st.columns(2)
                 with _ddc1:
-                    st.markdown("**?? Monthly Revenue**")
+                    st.markdown("**📈 Monthly Revenue**")
                     st.altair_chart(
                         chart_customer_monthly(_dm),
                         use_container_width=True,
                     )
                 with _ddc2:
-                    st.markdown("**?尼 Category Breakdown**")
+                    st.markdown("**🍩 Category Breakdown**")
                     st.altair_chart(
                         chart_customer_cat_donut(_dcat),
                         use_container_width=True,
                     )
 
+            # QTY by Category grouped bar
+            _qty_cat = build_customer_monthly_qty_by_cat(
+                dash_df[dash_df["Customer Name"].isin(_targets)]
+            )
+            if not _qty_cat.empty:
+                st.markdown("**📦 Monthly QTY by Category**")
+                st.altair_chart(
+                    chart_customer_qty_by_cat(_qty_cat),
+                    use_container_width=True,
+                )
+
             if not _dm.empty:
-                st.markdown("**?? Monthly Detail**")
+                st.markdown("**📋 Monthly Detail**")
                 st.dataframe(
                     _dm.style.format({
                         "Revenue": "{:,.0f}", "GP": "{:,.0f}",
@@ -844,7 +862,7 @@ with main_tab3:
                 has_shipping,
             )
             if not _pn.empty:
-                st.markdown("**? Part Number Detail (CDR + Tablet)**")
+                st.markdown("**📦 Part Number Detail (CDR + Tablet)**")
                 _pn_fmt = {"QTY": "{:,.0f}"}
                 if "Latest UP" in _pn.columns:
                     _pn_fmt["Latest UP"] = "{:,.2f}"

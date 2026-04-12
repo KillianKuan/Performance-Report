@@ -23,7 +23,7 @@ python -m PyInstaller ^
     --name SalesReportTool ^
     --onedir ^
     --noconsole ^
-    --icon NONE ^
+    --icon assets\app.ico ^
     --collect-all streamlit ^
     --copy-metadata streamlit ^
     --hidden-import streamlit.web.cli ^
