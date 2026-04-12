@@ -1,4 +1,4 @@
-﻿"""launcher.py - PyInstaller entry point.
+"""launcher.py - PyInstaller entry point.
 
 Starts Streamlit in a hidden subprocess, opens the browser when ready,
 and shuts the app down after the browser tab stops sending heartbeats.
@@ -20,6 +20,8 @@ MAX_PORT = 8510  # try up to 10 ports
 HEARTBEAT_PORT = 8502
 HEARTBEAT_TIMEOUT = 10
 CREATE_NO_WINDOW = 0x08000000
+CHILD_MODE_ENV = "SALESREPORT_CHILD"
+PORT_ENV = "SALESREPORT_STREAMLIT_PORT"
 
 _last_heartbeat = time.time()
 
@@ -41,7 +43,7 @@ def find_free_port() -> int:
     return BASE_PORT  # fallback
 
 
-def wait_for_server(url: str, max_wait: int = 30) -> bool:
+def wait_for_server(url: str, max_wait: int = 60) -> bool:
     """Wait until the Streamlit HTTP endpoint responds."""
     for _ in range(max_wait * 2):
         try:
@@ -54,11 +56,29 @@ def wait_for_server(url: str, max_wait: int = 30) -> bool:
 
 def get_app_path() -> Path:
     """Get the absolute path to app.py in both frozen and source mode."""
+    candidates: list[Path] = []
+
     if getattr(sys, "frozen", False):
-        base = Path(sys.executable).resolve().parent
+        exe_base = Path(sys.executable).resolve().parent
+        candidates.append(exe_base / "app" / "app.py")
+
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "app" / "app.py")
     else:
-        base = Path(__file__).resolve().parent
-    return base / "app" / "app.py"
+        candidates.append(Path(__file__).resolve().parent / "app" / "app.py")
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    searched = "\n".join(str(path) for path in candidates)
+    raise FileNotFoundError(f"app.py not found. Searched:\n{searched}")
+
+
+def is_child_mode() -> bool:
+    """Return True when this process should run Streamlit directly."""
+    return os.environ.get(CHILD_MODE_ENV) == "1"
 
 
 class _HeartbeatHandler(BaseHTTPRequestHandler):
@@ -104,32 +124,48 @@ def monitor_heartbeat(proc: subprocess.Popen[bytes]) -> None:
         break
 
 
-def main() -> None:
+def run_streamlit_child() -> None:
+    """Run Streamlit in-process inside the spawned child instance."""
     app_path = get_app_path()
-    if not app_path.exists():
-        raise FileNotFoundError(f"app.py not found: {app_path}")
+
+    port = os.environ.get(PORT_ENV, str(BASE_PORT))
+    os.environ["STREAMLIT_GLOBAL_DEVELOPMENT_MODE"] = "false"
+    os.environ["STREAMLIT_SERVER_PORT"] = port
+    os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
+    os.environ["STREAMLIT_BROWSER_GATHER_USAGE_STATS"] = "false"
+
+    sys.argv = ["streamlit", "run", str(app_path)]
+    from streamlit.web import cli as stcli
+
+    stcli.main()
+
+
+def build_child_command() -> list[str]:
+    """Build the child-process command for source and frozen modes."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable]
+    return [sys.executable, str(Path(__file__).resolve())]
+
+
+def main() -> None:
+    if is_child_mode():
+        run_streamlit_child()
+        return
+
+    app_path = get_app_path()
 
     port = find_free_port()
     url = f"http://localhost:{port}"
 
     threading.Thread(target=run_heartbeat_server, daemon=True).start()
 
-    cmd = [
-        sys.executable,
-        "-m",
-        "streamlit",
-        "run",
-        str(app_path),
-        "--server.port",
-        str(port),
-        "--server.headless",
-        "true",
-        "--browser.gatherUsageStats",
-        "false",
-    ]
+    cmd = build_child_command()
     env = dict(
         os.environ,
-        STREAMLIT_GLOBAL_DEVELOPMENT_MODE="false",
+        **{
+            CHILD_MODE_ENV: "1",
+            PORT_ENV: str(port),
+        },
         APP_HEARTBEAT_PORT=str(HEARTBEAT_PORT),
     )
     proc = subprocess.Popen(
@@ -138,8 +174,8 @@ def main() -> None:
         env=env,
     )
 
-    wait_for_server(url)
-    webbrowser.open(url)
+    if wait_for_server(url):
+        webbrowser.open(url)
     threading.Thread(target=monitor_heartbeat, args=(proc,), daemon=True).start()
     proc.wait()
 
