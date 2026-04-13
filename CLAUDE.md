@@ -20,18 +20,23 @@
 ## Category 分類邏輯
 
 優先順序：
-1. Category 欄直接比對（Tablet / CDR / Tablet ACC / CDR ACC，大小寫不敏感）
-2. DES 欄關鍵字比對（DES_RULES 字典，substring contains）
-3. Fallback → Others
+1. Customer Name 比對（`CUSTOMER_CATEGORY_MAP`，優先於所有其他規則）
+2. Category 欄直接比對（Tablet / CDR / Tablet ACC / CDR ACC / Signify，大小寫不敏感）
+3. DES 欄關鍵字比對（DES_RULES 字典，substring contains）
+4. Fallback → Others
 
-有效 Category：Tablet / CDR / Tablet ACC / CDR ACC / AI_SW / Others
+有效 Category：Tablet / CDR / Tablet ACC / CDR ACC / AI_SW / Signify / Others
 
-DES_RULES（修改時需同步更新 app.py 頂部字典）：
+CUSTOMER_CATEGORY_MAP（`utils.py` load_single_file 內）：
+- SIGNIFY → Signify
+
+DES_RULES（修改時需同步更新 `utils.py` 頂部字典）：
 - CDR ACC: cdr, gemini, evo, sprint, sd card, panic button, iosix, uvc camera,
            k220, k245, k265, smart link dongle, safetycam
 - Tablet ACC: tablet, prometheus, chiron, hera, phaeton, surfing pro, cradle,
               f840, ulmo, fleet cable
 - AI_SW: visionmax
+- Signify: signify
 
 ---
 
@@ -68,6 +73,26 @@ FCST 的 AMT / GP 是千元，`_parse_sheet()` 在建立 record 時自動 ×1,00
 `All Sheets`（預設）/ `Div.1&2_All` / `VT` / `Signify`
 `All Sheets` 時傳 `sheet_name=None` 給 `get_fcst_for_dashboard()`，自動合併全部 sheets。
 
+### Budget 整合
+`agg_budget_monthly(fcst_df)` 讀取 FCST 的 `AMT_Budget`/`GP_Budget`/`QTY_Budget` 欄，
+輸出與 `agg_blended_monthly()` 相同格式（`Source = "Budget"`）。
+
+Dashboard 行為：
+- KPI 列新增 **Budget Achievement%**（YTD Actual / FY Budget Revenue）與 **FY Budget Revenue**
+- 月趨勢圖將 Budget 以灰色虛線疊加在 Actual / Forecast 之上（`_SOURCE_COLOR` / `_SOURCE_DASH`）
+- `chart_gp_trend_blended` 中 Budget bar 以低透明度 (0.3) 獨立渲染，不與 Actual/Forecast 疊加
+
+### Customer Drill-Down FCST 整合
+當 FCST 資料可用且當年度被選取時，Customer Drill-Down 會：
+- 篩選 `_fcst_raw` 只留選取客戶
+- 重新執行 `blend_actual_fcst()` + `agg_blended_monthly()` + `agg_budget_monthly()`
+- 顯示 **FY Forecast KPIs** 列（FY Forecast Revenue、GP、Budget Achievement%、FY Budget Revenue）
+- 月收入圖改用 `chart_revenue_trend_blended`（Actual + Forecast + Budget）
+
+### 未匹配客戶警告位置
+`get_unmatched_customers()` 在 FCST 載入後由 Company Dashboard 呼叫，
+警告訊息直接顯示在 Dashboard 頁面頂部（非 sidebar）。
+
 ---
 
 ## 關鍵設計決策
@@ -87,15 +112,15 @@ FCST 的 AMT / GP 是千元，`_parse_sheet()` 在建立 record 時自動 ×1,00
 
 ## 目前版本
 
-v3.3（最新）— FCST 整合完成。
+v3.5（最新）— Budget 整合 + Customer Drill-Down FCST + Signify 獨立分類。
 
 ### 核心模組
 | 檔案 | 職責 |
 |------|------|
-| `app.py` | Streamlit UI、tab 邏輯、FCST blend 觸發 |
-| `utils.py` | 資料載入、Category 分類、KPI 計算、圖表資料準備 |
-| `charts.py` | Altair 圖表函式（含 blended trend charts） |
-| `fcst_loader.py` | FCST Excel 解析、blend、customer name mapping |
+| `app.py` | Streamlit UI、tab 邏輯、FCST/Budget blend 觸發、Customer Drill-Down FCST |
+| `utils.py` | 資料載入、Category 分類（含 CUSTOMER_CATEGORY_MAP）、KPI 計算、圖表資料準備 |
+| `charts.py` | Altair 圖表函式（Actual / Forecast / Budget 三線並呈） |
+| `fcst_loader.py` | FCST Excel 解析、blend、Budget aggregation、customer name mapping |
 
 ---
 

@@ -30,6 +30,7 @@ from utils import (
     build_top_customers, build_customer_detail,
     build_customer_monthly_qty_by_cat,
     build_pn_detail,
+    fmt_num,
 )
 from charts import (
     chart_up_tp_trend, chart_qty_by_year, chart_qty_by_month, chart_gp_pct_trend,
@@ -710,38 +711,47 @@ with main_tab3:
     # Collect unmatched FCST customers for warning
     _unmatched_fcst = fcst_loader.get_unmatched_customers() if _do_fcst else set()
     if _unmatched_fcst:
-        customer_list = [f"'{name}' (sheet: {sheet})" for name, sheet in sorted(_unmatched_fcst)]
         st.warning(
-            f"⚠️ FCST 未匹配客戶 ({len(_unmatched_fcst)} 個): {', '.join(customer_list)}。請更新 aliases.json 的 fcst_customer section。"
+            f"⚠️ FCST 未匹配客戶 ({len(_unmatched_fcst)} 個) — "
+            f"請更新 aliases.json 的 fcst_customer section。"
         )
+        with st.expander(f"🔍 點擊查看未匹配客戶詳情 ({len(_unmatched_fcst)} 個)", expanded=False):
+            _unmatched_df = pd.DataFrame(
+                sorted(_unmatched_fcst),
+                columns=["Customer Name", "Sheet"],
+            )
+            st.dataframe(_unmatched_df, hide_index=True, use_container_width=True)
 
     # ?? Section 1: KPI Metric Cards ??
-    st.subheader("📌 Overview")
-    if dash_yoy is not None:
-        st.caption(f"YoY delta: {_dash_max_yr} vs {_dash_max_yr - 1}")
-
     def _fmt_delta(val, suffix="%"):
         if val is None:
             return "N/A"
         return f"{val:+,.1f}{suffix}"
 
-    _k1, _k2, _k3, _k4, _k5, _k6 = st.columns(6)
-    _k1.metric("💰 Revenue", f"{_kpis_all['revenue']:,.0f}",
-               delta=_fmt_delta(_kpis_yoy["revenue_yoy"]))
-    _k2.metric("💵 GP", f"{_kpis_all['gp']:,.0f}",
-               delta=_fmt_delta(_kpis_yoy["gp_yoy"]))
-    _k3.metric("📈 GP%", f"{_kpis_all['gp_pct']:.1f}%",
-               delta=_fmt_delta(_kpis_yoy["gp_pct_yoy"], " ppt"))
-    _k4.metric("📦 QTY (CDR+Tablet)", f"{_kpis_all['qty']:,.0f}",
-               delta=_fmt_delta(_kpis_yoy["qty_yoy"]))
-    _k5.metric(
-        "👥 Customers", f"{_kpis_all['customers']:,}",
-        delta=(
-            f"{_kpis_yoy['customers_yoy']:+,}"
-            if _kpis_yoy["customers_yoy"] is not None else "N/A"
-        ),
-    )
-    _k6.metric("🗂️ Categories", f"{_kpis_all['active_cats']}")
+    # Container A — Overview
+    with st.container(border=True):
+        st.subheader("📌 Overview")
+        if dash_yoy is not None:
+            st.caption(f"YoY delta: {_dash_max_yr} vs {_dash_max_yr - 1}")
+        _k1, _k2, _k3, _k4 = st.columns(4)
+        _k1.metric("💰 Revenue (TWD)", fmt_num(_kpis_all['revenue']),
+                   delta=_fmt_delta(_kpis_yoy["revenue_yoy"]))
+        _k2.metric("💵 Gross Profit (TWD)", fmt_num(_kpis_all['gp']),
+                   delta=_fmt_delta(_kpis_yoy["gp_yoy"]))
+        _k3.metric("📈 GP Margin", f"{_kpis_all['gp_pct']:.1f}%",
+                   delta=_fmt_delta(_kpis_yoy["gp_pct_yoy"], " ppt"))
+        _k4.metric("📦 Units Sold", f"{_kpis_all['qty']:,.0f}",
+                   delta=_fmt_delta(_kpis_yoy["qty_yoy"]))
+        _k4.caption("CDR + Tablet only")
+        _k5, _k6 = st.columns(2)
+        _k5.metric(
+            "👥 Customers", f"{_kpis_all['customers']:,}",
+            delta=(
+                f"{_kpis_yoy['customers_yoy']:+,}"
+                if _kpis_yoy["customers_yoy"] is not None else "N/A"
+            ),
+        )
+        _k6.metric("🗂️ Categories", f"{_kpis_all['active_cats']}")
 
     # Full-Year Forecast row (only shown when current year is selected and FCST loaded)
     if not _blended_monthly.empty:
@@ -752,22 +762,21 @@ with main_tab3:
         _fy_gp_pct = _fy_gp / _fy_rev * 100 if _fy_rev else 0.0
         _fy_qty = _blended_monthly["QTY"].sum()
 
-        st.caption(
-            f"📊 Full-Year Forecast (YTD Actual + Remaining FCST) — sheet: **{_fcst_sheet}**"
-        )
-        _fk1, _fk2, _fk3, _fk4 = st.columns(4)
-        _fk1.metric(
-            "💰 FY Revenue Forecast", f"{_fy_rev:,.0f}",
-            delta=f"YTD: {_ytd_rev:,.0f}", delta_color="off",
-        )
-        _fk2.metric(
-            "💵 FY GP Forecast", f"{_fy_gp:,.0f}",
-            delta=f"YTD: {_ytd_gp:,.0f}", delta_color="off",
-        )
-        _fk3.metric("📈 FY GP% Forecast", f"{_fy_gp_pct:.1f}%")
-        _fk4.metric("📦 FY QTY Forecast", f"{_fy_qty:,.0f}")
+        st.divider()
 
-        # Budget Achievement metrics (2nd row)
+        # Container B — Full-Year Forecast
+        with st.container(border=True):
+            st.subheader("📊 Full-Year Forecast")
+            st.caption(f"YTD Actual + Remaining FCST — sheet: **{_fcst_sheet}**")
+            _fk1, _fk2, _fk3, _fk4 = st.columns(4)
+            _fk1.metric("💰 FY Revenue Forecast (TWD)", fmt_num(_fy_rev))
+            _fk1.caption(f"YTD: {fmt_num(_ytd_rev)}")
+            _fk2.metric("💵 FY Gross Profit Forecast (TWD)", fmt_num(_fy_gp))
+            _fk2.caption(f"YTD: {fmt_num(_ytd_gp)}")
+            _fk3.metric("📈 FY GP Margin Forecast", f"{_fy_gp_pct:.1f}%")
+            _fk4.metric("📦 FY Units Forecast", f"{_fy_qty:,.0f}")
+
+        # Container C — Budget Achievement
         try:
             _budget_monthly = fcst_loader.agg_budget_monthly(_fcst_raw)
             if not _budget_monthly.empty:
@@ -775,22 +784,16 @@ with main_tab3:
                 _budget_achievement_pct = (
                     _ytd_rev / _fy_budget_rev * 100 if _fy_budget_rev else 0.0
                 )
-                _bk1, _bk2 = st.columns(2)
-                _bk1.metric(
-                    "🎯 Budget Achievement%",
-                    f"{_budget_achievement_pct:.1f}%",
-                    delta=f"YTD vs FY Budget",
-                    delta_color="off",
-                )
-                _bk2.metric(
-                    "📊 FY Budget Revenue",
-                    f"{_fy_budget_rev:,.0f}",
-                    delta=f"Current: {_ytd_rev:,.0f}",
-                    delta_color="off",
-                )
+                st.divider()
+                with st.container(border=True):
+                    st.subheader("🎯 Budget Achievement")
+                    _bk1, _bk2 = st.columns(2)
+                    _bk1.metric("🎯 Budget Achievement", f"{_budget_achievement_pct:.1f}%")
+                    _bk1.caption("YTD vs FY Budget")
+                    _bk2.metric("📊 FY Budget Revenue (TWD)", fmt_num(_fy_budget_rev))
+                    _bk2.caption(f"Current: {fmt_num(_ytd_rev)}")
         except Exception as _budget_err:
             print(f"[Dashboard] Warning: Failed to calculate Budget Achievement%: {_budget_err}")
-
 
     st.divider()
 
@@ -839,25 +842,28 @@ with main_tab3:
     st.subheader("🧩 Category Analysis")
     _cat_br = build_category_breakdown(dash_df)
     _cat_mo = build_monthly_category(dash_df)
-    _cat_cols_count = 4 if not _fcst_cat_monthly.empty else 3
-    _cat_cols = st.columns(_cat_cols_count)
-    with _cat_cols[0]:
+    _cat_row1_c1, _cat_row1_c2 = st.columns(2)
+    with _cat_row1_c1:
         st.markdown("**🍩 Revenue by Category**")
         st.altair_chart(
             chart_category_donut(_cat_br), use_container_width=True,
         )
-    with _cat_cols[1]:
+    with _cat_row1_c2:
         st.markdown("**📊 Category Revenue Trend**")
         st.altair_chart(
             chart_category_stacked(_cat_mo), use_container_width=True,
         )
-    with _cat_cols[2]:
+    if not _fcst_cat_monthly.empty:
+        _cat_row2_c1, _cat_row2_c2 = st.columns(2)
+    else:
+        _cat_row2_c1 = st.columns(1)[0]
+    with _cat_row2_c1:
         st.markdown("**🤖 AI_SW Monthly Revenue Trend**")
         st.altair_chart(
             chart_ai_sw_revenue_trend(_cat_mo), use_container_width=True,
         )
     if not _fcst_cat_monthly.empty:
-        with _cat_cols[3]:
+        with _cat_row2_c2:
             st.markdown("**📊 FCST Category Revenue**")
             _fcst_cat_display = _fcst_cat_monthly.rename(
                 columns={"Cat": "Category", "Period": "Month"}
@@ -873,7 +879,8 @@ with main_tab3:
     _top_n = st.slider(
         "Number of customers", 5, 30, 10, key="dash_top_n",
     )
-    _top = build_top_customers(dash_df, _top_n, dash_yoy)
+    _fcst_blended_for_top = _blended_raw if (_do_fcst and not _blended_raw.empty) else None
+    _top = build_top_customers(dash_df, _top_n, dash_yoy, fcst_df=_fcst_blended_for_top)
     _tn1, _tn2 = st.columns(2)
     with _tn1:
         st.markdown(f"**🏆 Top {_top_n} Customers by Revenue**")
@@ -894,14 +901,30 @@ with main_tab3:
                 pass
             return ""
 
-        st.dataframe(
-            _top.style.format(
-                {"Revenue": "{:,.0f}", "GP": "{:,.0f}",
-                 "GP%": "{:.1f}", "QTY": "{:,.0f}", "YoY%": "{:+.1f}"},
-                na_rep="-",
-            ).map(_gp_color, subset=["GP%"]),
-            use_container_width=True,
-        )
+        def _achievement_color(val):
+            try:
+                n = float(val)
+                if n >= 80:
+                    return "color: #2e7d32; font-weight: bold"
+                if n < 50:
+                    return "color: #c62828; font-weight: bold"
+            except (ValueError, TypeError):
+                pass
+            return ""
+
+        _fmt = {"Revenue": "{:,.0f}", "GP": "{:,.0f}",
+                "GP%": "{:.1f}", "QTY": "{:,.0f}", "YoY%": "{:+.1f}"}
+        _style_subsets = [("GP%", _gp_color)]
+        if "FY Forecast" in _top.columns:
+            _fmt["FY Forecast"] = "{:,.0f}"
+            _fmt["Achievement%"] = "{:.1f}"
+            _style_subsets.append(("Achievement%", _achievement_color))
+
+        _styled = _top.style.format(_fmt, na_rep="-")
+        for _col, _fn in _style_subsets:
+            _styled = _styled.map(_fn, subset=[_col])
+
+        st.dataframe(_styled, use_container_width=True)
 
     st.divider()
 
@@ -980,20 +1003,23 @@ with main_tab3:
                 else f"{_targets[0]} + {len(_targets)-1} others"
             )
             st.markdown(f"### {_label}")
-            _dkc1, _dkc2, _dkc3, _dkc4 = st.columns(4)
-            _dkc1.metric("Revenue", f"{_dk['revenue']:,.0f}")
-            _dkc2.metric("GP", f"{_dk['gp']:,.0f}")
-            _dkc3.metric("GP%", f"{_dk['gp_pct']:.1f}%")
-            _dkc4.metric("QTY (CDR+Tablet)", f"{_dk['qty']:,.0f}")
+            with st.container(border=True):
+                _dkc1, _dkc2, _dkc3, _dkc4 = st.columns(4)
+                _dkc1.metric("Revenue (TWD)", fmt_num(_dk['revenue']))
+                _dkc2.metric("Gross Profit (TWD)", fmt_num(_dk['gp']))
+                _dkc3.metric("GP Margin", f"{_dk['gp_pct']:.1f}%")
+                _dkc4.metric("Units Sold", f"{_dk['qty']:,.0f}")
+                _dkc4.caption("CDR + Tablet only")
 
             # FY Forecast KPIs row
             if _do_fcst and not _fcst_raw.empty and not _fcst_filtered.empty:
-                st.markdown("**FY Forecast KPIs**")
-                _fkc1, _fkc2, _fkc3, _fkc4 = st.columns(4)
-                _fkc1.metric("FY Forecast Revenue", f"{_fy_forecast_revenue:,.0f}")
-                _fkc2.metric("FY Forecast GP", f"{_fy_forecast_gp:,.0f}")
-                _fkc3.metric("Budget Achievement%", f"{_budget_achievement_pct:.1f}%")
-                _fkc4.metric("FY Budget Revenue", f"{_fy_budget_revenue:,.0f}")
+                with st.container(border=True):
+                    st.markdown("**FY Forecast KPIs**")
+                    _fkc1, _fkc2, _fkc3, _fkc4 = st.columns(4)
+                    _fkc1.metric("FY Forecast Revenue (TWD)", fmt_num(_fy_forecast_revenue))
+                    _fkc2.metric("FY Forecast Gross Profit (TWD)", fmt_num(_fy_forecast_gp))
+                    _fkc3.metric("Budget Achievement", f"{_budget_achievement_pct:.1f}%")
+                    _fkc4.metric("FY Budget Revenue (TWD)", fmt_num(_fy_budget_revenue))
 
             if not _dm.empty and not _dcat.empty:
                 _ddc1, _ddc2 = st.columns(2)

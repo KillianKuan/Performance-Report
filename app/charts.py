@@ -345,27 +345,55 @@ def chart_revenue_trend_blended(blended_monthly_df: pd.DataFrame) -> alt.LayerCh
 def chart_gp_trend_blended(blended_monthly_df: pd.DataFrame) -> alt.LayerChart:
     """GP bar + GP% line dual-axis chart with Actual/Forecast/Budget color coding.
 
+    Budget bars are rendered as a separate low-opacity layer (reference only) so
+    they overlap rather than stack with Actual/Forecast bars.
+    GP% line uses only Actual/Forecast rows to avoid jumps from Budget GP%.
+
     Input: output of fcst_loader.agg_blended_monthly() or concat with agg_budget_monthly().
     Columns required: Period, MonthIndex, Source, GP, GP%.
     """
     df = blended_monthly_df.copy()
-    base = alt.Chart(df).encode(
-        x=alt.X("Period:N", title="Month", sort=_MONTHS_ORDER),
+    df_main = df[df["Source"] != "Budget"]
+    df_budget = df[df["Source"] == "Budget"]
+
+    bars_main = (
+        alt.Chart(df_main)
+        .mark_bar(opacity=0.65)
+        .encode(
+            x=alt.X("Period:N", title="Month", sort=_MONTHS_ORDER),
+            y=alt.Y("GP:Q", title="GP", axis=alt.Axis(format=",.0f")),
+            color=alt.Color("Source:N", scale=_SOURCE_COLOR,
+                            legend=alt.Legend(title="")),
+            tooltip=[
+                "Period:N", "Source:N",
+                alt.Tooltip("GP:Q", format=",.0f"),
+            ],
+        )
     )
-    bars = base.mark_bar(opacity=0.65).encode(
-        y=alt.Y("GP:Q", title="GP", axis=alt.Axis(format=",.0f")),
-        color=alt.Color("Source:N", scale=_SOURCE_COLOR,
-                        legend=alt.Legend(title="")),
-        tooltip=[
-            "Period:N", "Source:N",
-            alt.Tooltip("GP:Q", format=",.0f"),
-        ],
+    bars_budget = (
+        alt.Chart(df_budget)
+        .mark_bar(opacity=0.3)
+        .encode(
+            x=alt.X("Period:N", title="Month", sort=_MONTHS_ORDER),
+            y=alt.Y("GP:Q", title="GP", axis=alt.Axis(format=",.0f")),
+            color=alt.Color("Source:N", scale=_SOURCE_COLOR,
+                            legend=alt.Legend(title="")),
+            tooltip=[
+                "Period:N", "Source:N",
+                alt.Tooltip("GP:Q", format=",.0f"),
+            ],
+        )
     )
-    line = base.mark_line(
-        color="#ee6666",
-        point=alt.OverlayMarkDef(size=40, color="#ee6666"),
-    ).encode(
-        y=alt.Y("GP%:Q", title="GP%", axis=alt.Axis(format=".1f")),
-        tooltip=["Period:N", alt.Tooltip("GP%:Q", format=".1f")],
+    line = (
+        alt.Chart(df_main)
+        .mark_line(
+            color="#ee6666",
+            point=alt.OverlayMarkDef(size=40, color="#ee6666"),
+        )
+        .encode(
+            x=alt.X("Period:N", title="Month", sort=_MONTHS_ORDER),
+            y=alt.Y("GP%:Q", title="GP%", axis=alt.Axis(format=".1f")),
+            tooltip=["Period:N", alt.Tooltip("GP%:Q", format=".1f")],
+        )
     )
-    return alt.layer(bars, line).resolve_scale(y="independent")
+    return alt.layer(bars_main, bars_budget, line).resolve_scale(y="independent")

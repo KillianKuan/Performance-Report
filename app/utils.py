@@ -324,6 +324,27 @@ def fmt(df_display):
     )
 
 
+def fmt_num(n) -> str:
+    """Format a number with M/B/K suffix for KPI display. Returns 'N/A' for None/NaN."""
+    import math
+    if n is None:
+        return "N/A"
+    try:
+        if math.isnan(n):
+            return "N/A"
+    except TypeError:
+        return "N/A"
+    sign = "-" if n < 0 else ""
+    abs_n = abs(n)
+    if abs_n >= 1e9:
+        return f"{sign}{abs_n / 1e9:.2f}B"
+    if abs_n >= 1e6:
+        return f"{sign}{abs_n / 1e6:.1f}M"
+    if abs_n >= 1e3:
+        return f"{sign}{abs_n / 1e3:.1f}K"
+    return f"{'-' if n < 0 else ''}{abs_n:,.0f}"
+
+
 def show_bycat(long_bycat):
     all_months = sorted(long_bycat["Month"].unique().tolist())
     for cat in sorted_cats(long_bycat):
@@ -444,8 +465,8 @@ def build_customer_monthly_qty_by_cat(df: pd.DataFrame) -> pd.DataFrame:
     return agg
 
 
-def build_top_customers(df, n=10, prev_df=None):
-    """Top N customers by revenue with GP, GP%, QTY, YoY."""
+def build_top_customers(df, n=10, prev_df=None, fcst_df=None):
+    """Top N customers by revenue with GP, GP%, QTY, YoY, and optional FY Forecast."""
     agg = df.groupby("Customer Name", sort=False).agg(
         Revenue=("SALES Total AMT", "sum"),
         GP=(GP_COL, "sum"),
@@ -476,6 +497,24 @@ def build_top_customers(df, n=10, prev_df=None):
         agg["YoY%"] = None
 
     agg = agg.sort_values("Revenue", ascending=False).head(n).reset_index(drop=True)
+
+    if fcst_df is not None and not fcst_df.empty:
+        fy_agg = fcst_df.groupby("Customer", sort=False)["AMT"].sum().reset_index()
+        fy_agg.columns = ["Customer Name", "FY Forecast"]
+        ytd_agg = (
+            fcst_df[fcst_df["Source"] == "Actual"]
+            .groupby("Customer", sort=False)["AMT"].sum()
+            .reset_index()
+        )
+        ytd_agg.columns = ["Customer Name", "_YTD"]
+        agg = agg.merge(fy_agg, on="Customer Name", how="left").fillna({"FY Forecast": 0})
+        agg = agg.merge(ytd_agg, on="Customer Name", how="left").fillna({"_YTD": 0})
+        agg["Achievement%"] = agg.apply(
+            lambda r: r["_YTD"] / r["FY Forecast"] * 100 if r["FY Forecast"] else None,
+            axis=1,
+        )
+        agg = agg.drop(columns=["_YTD"])
+
     agg.index = agg.index + 1
     agg.index.name = "Rank"
     return agg

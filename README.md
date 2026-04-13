@@ -2,7 +2,7 @@
 
 A Streamlit-based interactive data analysis platform for sales performance reporting with intelligent data normalization, classification, and forecast integration.
 
-**Version:** 3.3 | **Status:** Production-ready  
+**Version:** 3.5 | **Status:** Production-ready  
 **Build Date:** April 2026
 
 ---
@@ -62,13 +62,16 @@ build.bat
 ### Data Intelligence
 
 #### 1. Automatic Category Classification
-- **Direct Matching:** Reads `Category` column with normalization
-- **Keyword-based (DES):** Falls back to `DES` field pattern matching:
-  - CDR ACC: cdr, gemini, evo, sprint, sd card, panic button, iosix, uvc camera, k220, k245, k265, smart link dongle, safetycam
-  - Tablet ACC: tablet, prometheus, chiron, hera, phaeton, surfing pro, cradle, f840, ulmo, fleet cable
-  - AI_SW: visionmax
-  - Others: catch-all
-- **Valid Categories:** `Tablet`, `CDR`, `Tablet ACC`, `CDR ACC`, `AI_SW`, `Others`
+Priority order:
+1. **Customer Name Override:** `CUSTOMER_CATEGORY_MAP` in `utils.py` (e.g., `SIGNIFY → Signify`) — takes priority over all other rules
+2. **Direct Matching:** Reads `Category` column with normalization
+3. **Keyword-based (DES):** Falls back to `DES` field pattern matching:
+   - CDR ACC: cdr, gemini, evo, sprint, sd card, panic button, iosix, uvc camera, k220, k245, k265, smart link dongle, safetycam
+   - Tablet ACC: tablet, prometheus, chiron, hera, phaeton, surfing pro, cradle, f840, ulmo, fleet cable
+   - AI_SW: visionmax
+   - Signify: signify
+   - Others: catch-all
+- **Valid Categories:** `Tablet`, `CDR`, `Tablet ACC`, `CDR ACC`, `AI_SW`, `Signify`, `Others`
 
 #### 2. Name Normalization (v3.2+)
 Automatically normalizes customer names and sales person names to handle variations:
@@ -195,8 +198,11 @@ apply_overrides()
 | `get_fcst_for_dashboard(data_dir, customer, sheet_name)` | Pivots to wide format for blending |
 | `blend_actual_fcst(actual_df, fcst_df, current_month)` | Merges actual + forecast by month boundary |
 | `agg_blended_monthly(blended_df)` | Company-level monthly totals with Source column |
+| `agg_budget_monthly(fcst_df)` | Company-level Budget monthly totals (`Source="Budget"`) |
 | `agg_fcst_category_monthly(fcst_df)` | Monthly × Cat aggregation for category chart |
 | `normalize_fcst_customer(fcst_name, sheet_name)` | Maps FCST names → canonical; fallback to `{sheet}_Others` |
+| `get_unmatched_customers()` | Returns set of (name, sheet) tuples unmatched during last FCST load |
+| `clear_unmatched_customers()` | Resets unmatched set (called at start of each `load_fcst()`) |
 
 #### `utils.py` Normalization Functions
 
@@ -260,9 +266,9 @@ _load_aliases(kind: "customer" | "sales_person")
 
 ### Data Exclusions
 
-Customers in `EXCLUDED_CUSTOMERS` set are automatically filtered:
+Customers in `EXCLUDED_CUSTOMERS` set are automatically filtered. Values must use the **normalized** form (no punctuation, uppercase):
 ```python
-EXCLUDED_CUSTOMERS = {"MITAC Computer(Kunshan) Co.,Ltd"}
+EXCLUDED_CUSTOMERS = {"MITAC COMPUTERKUNSHAN COLTD"}
 ```
 Modify in `utils.py` to add/remove excluded customers.
 
@@ -444,10 +450,14 @@ SalesReportTool.exe
    **📊 Company Dashboard**
    - KPI cards (Total Sales, GP, GP%, QTY, Customers, Categories)
    - Full-Year Forecast row (Revenue, GP, GP%, QTY) — shown when current year is selected and FCST file exists
-   - Monthly trend with Actual (solid) / Forecast (dashed) overlay
+   - **Budget Achievement** row (Budget Achievement%, FY Budget Revenue vs YTD Actual)
+   - Monthly trend with Actual (solid blue) / Forecast (dashed green) / Budget (dashed gray) overlay
    - Category breakdown (donut + stacked bar + AI_SW trend + FCST category chart)
-   - Top N customers (bar chart + table)
-   - Customer detail drill-down with monthly revenue, category donut, QTY by category, part number detail
+   - Top N customers (bar chart + table) with FY Forecast and Achievement%
+   - Customer detail drill-down:
+     - Monthly revenue chart: Actual + Forecast + Budget when FCST available
+     - FY Forecast KPIs row (FY Forecast Revenue, GP, Budget Achievement%, FY Budget Revenue)
+     - Category donut, QTY by category, part number detail
 
 ### Export Data
 
@@ -517,6 +527,28 @@ SalesReportTool.exe
 ---
 
 ## 📝 Change Log
+
+### v3.5 (April 2026)
+- ✨ **Budget Integration in Company Dashboard**
+  - New `agg_budget_monthly()` in `fcst_loader.py` reads `AMT_Budget`/`GP_Budget`/`QTY_Budget` from FCST file
+  - Budget Achievement% KPI card (YTD Actual / FY Budget Revenue) added below Forecast KPI row
+  - Monthly trend charts now show three lines: Actual (solid blue), Forecast (dashed green), Budget (dashed gray)
+  - `chart_gp_trend_blended` renders Budget bars at low opacity (0.3) to avoid visual overlap
+- ✨ **FCST Integration in Customer Drill-Down**
+  - Per-customer FCST data filtered from company-level `_fcst_raw`
+  - FY Forecast KPIs row (Revenue, GP, Budget Achievement%, FY Budget Revenue) per customer/group
+  - Monthly revenue chart in drill-down switches to blended Actual + Forecast + Budget view when FCST available
+- 🔔 **Unmatched FCST Customer Warnings**
+  - `get_unmatched_customers()` / `clear_unmatched_customers()` public API added to `fcst_loader.py`
+  - Warnings now surface in the Company Dashboard page body (not sidebar)
+
+### v3.4 (April 2026)
+- ✨ **Signify as Independent Product Category**
+  - `VALID_CATEGORIES` and `CAT_ORDER` extended with `Signify`
+  - `DES_RULES` entry: keyword `"signify"` → category `Signify`
+  - `CUSTOMER_CATEGORY_MAP` in `utils.py`: customer name `SIGNIFY` → category `Signify` (overrides Category/DES logic)
+  - `CAT_COLORS` in `charts.py`: Signify → `#9467bd` (purple)
+- 🐛 **EXCLUDED_CUSTOMERS normalized form** (`MITAC COMPUTERKUNSHAN COLTD` after punctuation strip)
 
 ### v3.3 (April 2026)
 - ✨ **FCST Integration in Company Dashboard**
@@ -604,4 +636,4 @@ SalesReportTool.exe
 
 ---
 
-**Last Updated:** 2026-04-12
+**Last Updated:** 2026-04-13
